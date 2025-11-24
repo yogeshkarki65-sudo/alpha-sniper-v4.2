@@ -6,8 +6,8 @@ class MexcExchange:
     def __init__(self, config, logger):
         self.config = config
         self.client = ccxt.mexc({
-            'apiKey': self.config.MEXC_API_KEY,
-            'secret': self.config.MEXC_SECRET_KEY,
+            'apiKey': self.config["MEXC_API_KEY"],
+            'secret': self.config["MEXC_SECRET_KEY"],
             'timeout': 8000,
             'enableRateLimit': True,
         })
