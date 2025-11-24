@@ -43,5 +43,34 @@ class Scanner:
         return total_signals  # Return the total_signals dictionary
 
     def fetch_market_data(self):
-        # Logic to fetch market data
-        return []
+        # Fetch market data from the exchange
+        try:
+            # Example: Fetch 15-minute candles for a specific symbol
+            symbol = 'BTC/USDT'  # Replace with the desired trading pair
+            timeframe = '15m'
+            limit = 100  # Number of candles to fetch
+            ohlcv = self.exchange.get_klines(symbol, timeframe, limit)
+            market_data = []
+            for candle in ohlcv:
+                market_data.append({
+                    'timestamp': candle[0],
+                    'open': candle[1],
+                    'high': candle[2],
+                    'low': candle[3],
+                    'close': candle[4],
+                    'volume': candle[5],
+                    'rvol': self.calculate_rvol(candle),  # Implement this method to calculate RVOL
+                    'score': self.calculate_score(candle)  # Implement this method to calculate score
+                })
+            return market_data
+        except Exception as e:
+            self.logger.error(f"Error fetching market data: {e}")
+            return []
+
+    def calculate_rvol(self, candle):
+        # Implement logic to calculate RVOL based on the candle data
+        return 1.0  # Placeholder value
+
+    def calculate_score(self, candle):
+        # Implement logic to calculate score based on the candle data
+        return 100  # Placeholder value
