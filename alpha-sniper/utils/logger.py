@@ -1,6 +1,11 @@
 import logging
+import os
 
 def setup_logger():
+    # Create logs directory if it doesn't exist
+    if not os.path.exists('logs'):
+        os.makedirs('logs')
+
     logger = logging.getLogger("AlphaSniper")
     logger.setLevel(logging.DEBUG)
     ch = logging.StreamHandler()
