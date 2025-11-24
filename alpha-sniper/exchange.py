@@ -2,8 +2,8 @@ import ccxt
 import time
 import logging
 
-class Exchange:
-    def __init__(self, config):
+class MexcExchange:
+    def __init__(self, config, logger):
         self.config = config
         self.client = ccxt.mexc({
             'apiKey': self.config.MEXC_API_KEY,
@@ -11,7 +11,7 @@ class Exchange:
             'timeout': 8000,
             'enableRateLimit': True,
         })
-        self.logger = logging.getLogger(__name__)
+        self.logger = logger
 
     def _retry_request(self, func, *args, **kwargs):
         for attempt in range(3):
