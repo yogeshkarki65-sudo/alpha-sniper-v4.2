@@ -27,7 +27,7 @@ class ExchangeClient:
             try:
                 return func()
             except Exception as e:
-                if self.config.sim_mode and "code": 10072 in str(e):
+                if self.config.sim_mode and "code" in str(e) and "10072" in str(e):
                     self.logger.warning("Warning: API key info invalid in SIM mode.")
                     return None
                 self.logger.error(f"Error on attempt {attempt + 1}: {label} {repr(e)}")
