@@ -5,10 +5,11 @@ from signals.bear_micro_long import BearMicroLongEngine
 from utils.telegram import send_telegram
 
 class Scanner:
-    def __init__(self, config, exchange, risk_engine):
+    def __init__(self, exchange, risk_engine, config, logger):
         self.config = config
         self.exchange = exchange
         self.risk_engine = risk_engine
+        self.logger = logger
         self.long_engine = LongEngine(config)
         self.short_engine = ShortEngine(config)
         self.pump_engine = PumpEngine(config)
