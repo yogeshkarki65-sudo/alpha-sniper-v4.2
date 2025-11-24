@@ -40,6 +40,8 @@ class Scanner:
         all_signals = long_signals + short_signals + pump_signals + bear_micro_long_signals
         self.risk_engine.evaluate_signals(all_signals)
 
+        return total_signals  # Return the total_signals dictionary
+
     def fetch_market_data(self):
         # Logic to fetch market data
         return []
