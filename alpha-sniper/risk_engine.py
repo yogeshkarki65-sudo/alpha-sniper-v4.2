@@ -1,5 +1,6 @@
 import json
 import logging
+from utils.telegram import send_telegram
 
 class RiskEngine:
     def __init__(self, config, exchange, logger):
@@ -42,6 +43,7 @@ class RiskEngine:
         self.logger.info(f"📈 Regime update | price={price}, ema200={ema200}, RSI={rsi}, 30d={thirty_day_return}%")
         # Determine regime based on the calculated values
         regime = "BULL"  # Example regime determination logic
+        send_telegram(f"📊 Regime changed → {regime}")
         return regime
 
     def save_positions(self):

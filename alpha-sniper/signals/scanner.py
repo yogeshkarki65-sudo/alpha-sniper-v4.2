@@ -2,6 +2,7 @@ from signals.long_engine import LongEngine
 from signals.short_engine import ShortEngine
 from signals.pump_engine import PumpEngine
 from signals.bear_micro_long import BearMicroLongEngine
+from utils.telegram import send_telegram
 
 class Scanner:
     def __init__(self, config, exchange, risk_engine):
@@ -30,6 +31,9 @@ class Scanner:
         self.logger.info(f"🧠 Scanner started | regime={self.risk_engine.current_regime}")
         self.logger.info(f"📊 Universe size: {len(market_data)}")
         self.logger.info(f"📡 Signals found | long={total_signals['long']} short={total_signals['short']} pump={total_signals['pump']} bear_micro={total_signals['bear_micro']}")
+
+        if total_signals['long'] > 0 or total_signals['short'] > 0 or total_signals['pump'] > 0:
+            send_telegram(f"📡 Signals found | long={total_signals['long']} short={total_signals['short']} pump={total_signals['pump']}")
 
         # Combine and process signals
         all_signals = long_signals + short_signals + pump_signals + bear_micro_long_signals

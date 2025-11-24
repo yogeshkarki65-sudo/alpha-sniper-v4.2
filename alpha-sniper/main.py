@@ -4,19 +4,18 @@ from exchange import MexcExchange
 from risk_engine import RiskEngine
 from signals.scanner import Scanner
 from utils.logger import setup_logger
-from utils.telegram import Telegram
+from utils.telegram import send_telegram
 
 
 def main():
     logger = setup_logger()
     config = load_config()
-    telegram = Telegram(config)
 
     scan_interval = int(config.get("SCAN_INTERVAL_SECONDS", 300))
     sim_mode = config.get("SIM_MODE", True)
     starting_equity = float(config.get("STARTING_EQUITY", 1000))
 
-    telegram.send_alert(f"🚀 Bot started (SIM_MODE={sim_mode})")
+    send_telegram(f"🚀 Bot started (SIM_MODE={sim_mode})")
     logger.info("🚀 Starting Alpha Sniper V4.2 bot...")
     logger.info(f"SIM_MODE={sim_mode} | STARTING_EQUITY={starting_equity} | SCAN_INTERVAL={scan_interval}s")
 
@@ -28,12 +27,13 @@ def main():
     while True:
         logger.info("=" * 80)
         logger.info("🔄 New bot cycle starting...")
+        send_telegram("🔄 New cycle started")
 
         # 1) Regime detection
         try:
             regime = risk_engine.get_current_regime()
             logger.info(f"📊 Current regime: {regime}")
-            telegram.send_alert(f"📊 Regime changed → {regime}")
+            send_telegram(f"📊 Regime changed → {regime}")
         except Exception:
             logger.exception("❌ Failed to update/get market regime")
             regime = "UNKNOWN"
@@ -44,9 +44,10 @@ def main():
             signals = scanner.scan()
             logger.info("✅ Scanner cycle finished")
             if signals['long'] > 0 or signals['short'] > 0 or signals['pump'] > 0:
-                telegram.send_alert(f"📡 Signals detected | L={signals['long']} S={signals['short']} P={signals['pump']}")
-        except Exception:
+                send_telegram(f"📡 Signals detected | L={signals['long']} S={signals['short']} P={signals['pump']}")
+        except Exception as e:
             logger.exception("❌ Error during scanner cycle")
+            send_telegram(f"❌ Error during scanner cycle: {str(e)}")
 
         # 3) Sleep until next cycle
         logger.info(f"😴 Sleeping {scan_interval} seconds before next cycle...")
