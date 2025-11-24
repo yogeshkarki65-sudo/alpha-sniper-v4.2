@@ -2,16 +2,23 @@ import ccxt
 import time
 import logging
 
-class MexcExchange:
+class ExchangeClient:
     def __init__(self, config, logger):
         self.config = config
-        self.client = ccxt.mexc({
-            'apiKey': self.config["MEXC_API_KEY"],
-            'secret': self.config["MEXC_SECRET_KEY"],
-            'timeout': 8000,
-            'enableRateLimit': True,
-        })
         self.logger = logger
+        self.client = None
+
+        if self.config["SIM_MODE"]:
+            # In SIM mode, use public endpoints only
+            self.logger.info("Running in SIM mode, using public endpoints.")
+        else:
+            # In live mode, initialize the client with API keys
+            self.client = ccxt.mexc({
+                'apiKey': self.config["MEXC_API_KEY"],
+                'secret': self.config["MEXC_SECRET_KEY"],
+                'timeout': 8000,
+                'enableRateLimit': True,
+            })
 
     def _retry_request(self, func, *args, **kwargs):
         for attempt in range(3):
@@ -23,24 +30,53 @@ class MexcExchange:
         raise Exception("Max retries exceeded")
 
     def get_klines(self, symbol, timeframe, limit):
-        return self._retry_request(self.client.fetch_ohlcv, symbol, timeframe, limit)
+        if self.config["SIM_MODE"]:
+            # Simulate fetching market data
+            self.logger.info(f"Simulating fetching OHLCV for {symbol} with timeframe {timeframe}.")
+            return [[0, 0, 0, 0, 0, 0]] * limit  # Placeholder for simulated data
+        else:
+            return self._retry_request(self.client.fetch_ohlcv, symbol, timeframe, limit)
 
     def get_order_book(self, symbol):
-        return self._retry_request(self.client.fetch_order_book, symbol)
+        if self.config["SIM_MODE"]:
+            self.logger.info(f"Simulating fetching order book for {symbol}.")
+            return {}  # Placeholder for simulated order book
+        else:
+            return self._retry_request(self.client.fetch_order_book, symbol)
 
     def get_balance(self):
-        return self._retry_request(self.client.fetch_balance)
+        if self.config["SIM_MODE"]:
+            self.logger.info("Simulating fetching balance.")
+            return {"free": {}, "used": {}, "total": {}}  # Placeholder for simulated balance
+        else:
+            return self._retry_request(self.client.fetch_balance)
 
     def create_order(self, symbol, side, amount, order_type, price=None, params={}):
-        return self._retry_request(self.client.create_order, symbol, side, amount, order_type, price, params)
+        if self.config["SIM_MODE"]:
+            self.logger.info(f"Simulating order creation: {side} {amount} of {symbol}.")
+            return {"id": "simulated_order_id"}  # Placeholder for simulated order
+        else:
+            return self._retry_request(self.client.create_order, symbol, side, amount, order_type, price, params)
 
     def get_open_positions(self):
-        return self._retry_request(self.client.fetch_open_positions)
+        if self.config["SIM_MODE"]:
+            self.logger.info("Simulating fetching open positions.")
+            return []  # Placeholder for simulated open positions
+        else:
+            return self._retry_request(self.client.fetch_open_positions)
 
     def close_all_spot_positions(self):
-        # Logic to close all spot positions
-        pass
+        if self.config["SIM_MODE"]:
+            self.logger.info("Simulating closing all spot positions.")
+            return  # Placeholder for simulated close
+        else:
+            # Logic to close all spot positions
+            pass
 
     def move_futures_sl_to_breakeven(self):
-        # Logic to move futures stop loss to breakeven
-        pass
+        if self.config["SIM_MODE"]:
+            self.logger.info("Simulating moving futures SL to breakeven.")
+            return  # Placeholder for simulated action
+        else:
+            # Logic to move futures stop loss to breakeven
+            pass

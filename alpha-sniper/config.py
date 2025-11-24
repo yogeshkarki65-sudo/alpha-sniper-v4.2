@@ -1,14 +1,27 @@
 import os
 from dotenv import load_dotenv
 
-def load_config():
+def get_config():
     load_dotenv()
+    sim_mode = os.getenv("SIM_MODE", "true").lower() in ("true", "1")
+    
+    if sim_mode:
+        # In SIM mode, we do not require API keys
+        api_key = os.getenv("MEXC_API_KEY", "")
+        secret_key = os.getenv("MEXC_SECRET_KEY", "")
+    else:
+        # In live mode, we require valid API keys
+        api_key = os.getenv("MEXC_API_KEY")
+        secret_key = os.getenv("MEXC_SECRET_KEY")
+        if not api_key or not secret_key:
+            raise Exception("Live mode requires MEXC_API_KEY and MEXC_SECRET_KEY")
+
     return {
-        "MEXC_API_KEY": os.getenv("MEXC_API_KEY"),
-        "MEXC_SECRET_KEY": os.getenv("MEXC_SECRET_KEY"),
+        "MEXC_API_KEY": api_key,
+        "MEXC_SECRET_KEY": secret_key,
         "TELEGRAM_BOT_TOKEN": os.getenv("TELEGRAM_BOT_TOKEN"),
         "TELEGRAM_CHAT_ID": os.getenv("TELEGRAM_CHAT_ID"),
-        "SIM_MODE": os.getenv("SIM_MODE", "false").lower() == "true",
+        "SIM_MODE": sim_mode,
         "STARTING_EQUITY": float(os.getenv("STARTING_EQUITY", 1000)),
         "MAX_PORTFOLIO_HEAT": float(os.getenv("MAX_PORTFOLIO_HEAT", 0.012)),
         "MAX_CONCURRENT_POSITIONS": int(os.getenv("MAX_CONCURRENT_POSITIONS", 5)),
