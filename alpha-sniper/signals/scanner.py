@@ -14,5 +14,16 @@ class Scanner:
         self.bear_micro_long_engine = BearMicroLongEngine(config)
 
     def run(self):
-        # Logic to run the scanner and generate signals
-        pass
+        market_data = self.fetch_market_data()
+        long_signals = self.long_engine.generate_signals(market_data)
+        short_signals = self.short_engine.generate_signals(market_data)
+        pump_signals = self.pump_engine.generate_signals(market_data)
+        bear_micro_long_signals = self.bear_micro_long_engine.generate_signals(market_data)
+
+        # Combine and process signals
+        all_signals = long_signals + short_signals + pump_signals + bear_micro_long_signals
+        self.risk_engine.evaluate_signals(all_signals)
+
+    def fetch_market_data(self):
+        # Logic to fetch market data
+        return []
