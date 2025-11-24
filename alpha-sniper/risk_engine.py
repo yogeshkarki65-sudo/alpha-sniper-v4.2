@@ -2,12 +2,12 @@ import json
 import logging
 
 class RiskEngine:
-    def __init__(self, config, exchange):
+    def __init__(self, config, exchange, logger):
         self.config = config
         self.exchange = exchange
+        self.logger = logger
         self.current_regime = None
         self.open_positions = []
-        self.logger = logging.getLogger(__name__)
 
     def detect_regime(self):
         # Logic to detect market regime
@@ -31,6 +31,18 @@ class RiskEngine:
             elif signal['direction'] == 'SHORT':
                 self.logger.info(f"Evaluating short signal for {signal['symbol']}")
                 # Implement trade execution logic here
+
+    def get_current_regime(self):
+        # Example logic to determine the current regime
+        price = 0  # Replace with actual price fetching logic
+        ema200 = 0  # Replace with actual EMA calculation
+        rsi = 0  # Replace with actual RSI calculation
+        thirty_day_return = 0  # Replace with actual return calculation
+
+        self.logger.info(f"📈 Regime update | price={price}, ema200={ema200}, RSI={rsi}, 30d={thirty_day_return}%")
+        # Determine regime based on the calculated values
+        regime = "BULL"  # Example regime determination logic
+        return regime
 
     def save_positions(self):
         with open('positions.json', 'w') as f:
