@@ -13,10 +13,13 @@ def main():
     risk_engine = RiskEngine(config, exchange)
     scanner = Scanner(config, exchange, risk_engine)
 
+    logger.info("Starting Alpha Sniper Bot...")
+    
     # Schedule the scanner
     schedule.every(config.SCAN_INTERVAL_SECONDS).seconds.do(scanner.run)
     
     while True:
+        logger.info("Running scheduled tasks...")
         schedule.run_pending()
         time.sleep(1)
 
