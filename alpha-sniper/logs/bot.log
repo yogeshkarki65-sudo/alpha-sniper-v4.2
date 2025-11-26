@@ -1301,3 +1301,60 @@ TypeError: 'NoneType' object is not subscriptable
 2025-11-24 17:30:39 | INFO | 📡 Signals found | long=0 short=0 pump=0 bear_micro=0
 2025-11-24 17:30:39 | INFO | ✅ Scanner cycle finished
 2025-11-24 17:30:39 | INFO | 😴 Sleeping 300 seconds before next cycle...
+2025-11-26 14:51:19 | INFO | ============================================================
+2025-11-26 14:51:19 | INFO | 🚀 Alpha Sniper V4.2 Starting...
+2025-11-26 14:51:19 | INFO | 🔧 Mode: SIM
+2025-11-26 14:51:19 | INFO | 💰 Starting Equity: $100.00
+2025-11-26 14:51:19 | INFO | ============================================================
+2025-11-26 14:51:19 | INFO | 📱 Telegram notifications enabled
+2025-11-26 14:51:19 | INFO | 🌐 ExchangeClient initialized in SIM mode (public endpoints only, no API keys)
+2025-11-26 14:51:19 | INFO | 💰 RiskEngine initialized | Starting equity: $100.00
+2025-11-26 14:51:19 | INFO | 
+2025-11-26 14:51:19 | INFO | 🔄==========================================================
+2025-11-26 14:51:19 | INFO | 🔄 New trading cycle starting...
+2025-11-26 14:51:19 | INFO | 🔄==========================================================
+2025-11-26 14:51:19 | ERROR | Error on attempt 1: fetch_ohlcv BTC/USDT 1d NetworkError('mexc GET https://api.mexc.com/api/v3/exchangeInfo')
+2025-11-26 14:51:21 | ERROR | Error on attempt 2: fetch_ohlcv BTC/USDT 1d NetworkError('mexc GET https://api.mexc.com/api/v3/exchangeInfo')
+2025-11-26 14:51:23 | ERROR | Error on attempt 3: fetch_ohlcv BTC/USDT 1d NetworkError('mexc GET https://api.mexc.com/api/v3/exchangeInfo')
+2025-11-26 14:51:25 | ERROR | Error fetch_ohlcv BTC/USDT 1d: Max retries exceeded
+2025-11-26 14:51:25 | WARNING | ⚠️ Not enough BTC data for regime detection, defaulting to SIDEWAYS
+2025-11-26 14:51:25 | INFO | 📊 No open positions to manage
+2025-11-26 14:51:25 | INFO | 🔍 Scanner starting | Regime: SIDEWAYS
+2025-11-26 14:51:25 | ERROR | Error on attempt 1: load_markets NetworkError('mexc GET https://api.mexc.com/api/v3/exchangeInfo')
+2025-11-26 14:51:27 | ERROR | Error on attempt 2: load_markets NetworkError('mexc GET https://api.mexc.com/api/v3/exchangeInfo')
+2025-11-26 14:51:29 | ERROR | Error on attempt 3: load_markets NetworkError('mexc GET https://api.mexc.com/api/v3/exchangeInfo')
+2025-11-26 14:51:31 | ERROR | Error load_markets: Max retries exceeded
+2025-11-26 14:51:31 | ERROR | 🔴 Failed to load markets from exchange
+2025-11-26 14:51:31 | WARNING | ⚠️ No symbols in universe after filtering
+2025-11-26 14:51:31 | INFO | 📊 No signals to process
+2025-11-26 14:51:31 | INFO | 
+2025-11-26 14:51:31 | INFO | 📊 Cycle Summary:
+2025-11-26 14:51:31 | INFO |    Regime: SIDEWAYS
+2025-11-26 14:51:31 | INFO |    Equity: $100.00
+2025-11-26 14:51:31 | INFO |    Daily PnL: $+0.00
+2025-11-26 14:51:31 | INFO |    Open Positions: 0/5
+2025-11-26 14:51:31 | INFO |    Portfolio Heat: 0.00% / 1.20%
+2025-11-26 14:51:31 | INFO | 😴 Sleeping until next cycle...
+2025-11-26 14:51:31 | INFO | ⏰ Scheduling scans every 300 seconds
+2025-11-26 14:51:47 | INFO | 
+2025-11-26 14:51:47 | INFO | 👋 Received shutdown signal
+2025-11-26 14:51:47 | INFO | 🛑 Shutting down...
+2025-11-26 14:51:47 | INFO | 👋 Goodbye!
+2025-11-26 14:51:58 | INFO | ============================================================
+2025-11-26 14:51:58 | INFO | 🚀 Alpha Sniper V4.2 Starting...
+2025-11-26 14:51:58 | INFO | 🔧 Mode: SIM
+2025-11-26 14:51:58 | INFO | 💰 Starting Equity: $100.00
+2025-11-26 14:51:58 | INFO | ============================================================
+2025-11-26 14:51:58 | INFO | 📱 Telegram notifications enabled
+2025-11-26 14:51:58 | INFO | 🌐 ExchangeClient initialized in SIM mode (public endpoints only, no API keys)
+2025-11-26 14:51:58 | INFO | 💰 RiskEngine initialized | Starting equity: $100.00
+2025-11-26 14:51:58 | INFO | 
+2025-11-26 14:51:58 | INFO | 🔄==========================================================
+2025-11-26 14:51:58 | INFO | 🔄 New trading cycle starting...
+2025-11-26 14:51:58 | INFO | 🔄==========================================================
+2025-11-26 14:51:58 | ERROR | Error on attempt 1: fetch_ohlcv BTC/USDT 1d NetworkError('mexc GET https://api.mexc.com/api/v3/exchangeInfo')
+2025-11-26 14:52:00 | ERROR | Error on attempt 2: fetch_ohlcv BTC/USDT 1d NetworkError('mexc GET https://api.mexc.com/api/v3/exchangeInfo')
+2025-11-26 14:52:02 | INFO | 
+2025-11-26 14:52:02 | INFO | 👋 Received shutdown signal
+2025-11-26 14:52:02 | INFO | 🛑 Shutting down...
+2025-11-26 14:52:02 | INFO | 👋 Goodbye!
