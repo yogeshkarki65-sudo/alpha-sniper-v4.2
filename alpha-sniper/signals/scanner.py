@@ -38,7 +38,10 @@ class Scanner:
         """
         regime = self.risk_engine.current_regime or "SIDEWAYS"
 
-        self.logger.info(f"🔍 Scanner starting | Regime: {regime}")
+        self.logger.info("")
+        self.logger.info("=" * 50)
+        self.logger.info(f"🔍 SCANNER CYCLE START | Regime: {regime}")
+        self.logger.info("=" * 50)
 
         # 1. Get universe of tradeable symbols
         universe = self._build_universe()
@@ -47,7 +50,7 @@ class Scanner:
             self.logger.warning("⚠️ No symbols in universe after filtering")
             return []
 
-        self.logger.info(f"📊 Universe size: {len(universe)} symbols after filtering")
+        self.logger.info(f"📊 Universe: {len(universe)} symbols passed filters")
 
         # 2. Fetch market data for universe
         market_data = self._fetch_market_data(universe)
@@ -69,19 +72,27 @@ class Scanner:
         all_signals.sort(key=lambda x: x.get('score', 0), reverse=True)
 
         # 5. Log results
+        self.logger.info("")
         self.logger.info(
-            f"📡 Signals found | "
-            f"long={len(long_signals)} short={len(short_signals)} "
-            f"pump={len(pump_signals)} bear_micro={len(bear_micro_signals)} "
-            f"| Total={len(all_signals)}"
+            f"📡 Signals Generated | "
+            f"Long: {len(long_signals)} | Short: {len(short_signals)} | "
+            f"Pump: {len(pump_signals)} | BearMicro: {len(bear_micro_signals)} | "
+            f"TOTAL: {len(all_signals)}"
         )
 
         if all_signals:
             top_signal = all_signals[0]
             self.logger.info(
-                f"   Top signal: {top_signal['symbol']} {top_signal['engine']} "
-                f"(score={top_signal['score']})"
+                f"   🎯 Top signal: {top_signal['symbol']} | "
+                f"Engine: {top_signal['engine']} | "
+                f"Score: {top_signal['score']} | "
+                f"Side: {top_signal.get('side', 'N/A')}"
             )
+        else:
+            self.logger.info("   No signals met criteria")
+
+        self.logger.info("=" * 50)
+        self.logger.info("")
 
         return all_signals
 
@@ -207,12 +218,9 @@ class Scanner:
                 fetch_errors += 1
                 continue
 
-        self.logger.debug(
-            f"Market data fetch stats | "
-            f"fetched={len(market_data)} "
-            f"rejected_volume={rejected_volume} "
-            f"rejected_spread={rejected_spread} "
-            f"errors={fetch_errors}"
+        self.logger.info(
+            f"📊 Market data: {len(market_data)} symbols fetched | "
+            f"rejected: volume={rejected_volume} spread={rejected_spread} errors={fetch_errors}"
         )
 
         return market_data

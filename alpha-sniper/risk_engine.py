@@ -37,6 +37,7 @@ class RiskEngine:
 
         # Position tracking for daily loss
         self.closed_trades_today = []
+        self.daily_loss_alert_sent = False  # Track if alert already sent today
 
         self.logger.info(f"💰 RiskEngine initialized | Starting equity: ${self.starting_equity:.2f}")
 
@@ -72,6 +73,9 @@ class RiskEngine:
 
             df = helpers.ohlcv_to_dataframe(ohlcv)
 
+            # Ensure close column is numeric (critical for calculations)
+            df['close'] = df['close'].astype(float)
+
             # Calculate indicators
             ema200 = helpers.calculate_ema(df, 'close', 200).iloc[-1]
             rsi = helpers.calculate_rsi(df, 'close', 14).iloc[-1]
@@ -102,7 +106,16 @@ class RiskEngine:
             # Check if regime changed
             if regime != self.current_regime:
                 self.logger.info(f"📊 Regime changed: {self.current_regime} → {regime}")
-                self.telegram.send(f"📊 Regime changed → {regime}")
+
+                # Enhanced Telegram alert with details
+                alert_msg = (
+                    f"📈 Regime changed: {self.current_regime} → {regime}\n"
+                    f"Price: ${current_price:.2f}\n"
+                    f"EMA200: ${ema200:.2f}\n"
+                    f"RSI: {rsi:.1f}\n"
+                    f"30d Return: {return_30d:+.1f}%"
+                )
+                self.telegram.send(alert_msg)
                 self.current_regime = regime
             else:
                 self.logger.info(f"📊 Current regime: {regime}")
@@ -166,6 +179,15 @@ class RiskEngine:
         if self.config.enable_daily_loss_limit:
             daily_loss_pct = self.daily_pnl / self.starting_equity if self.starting_equity > 0 else 0
             if daily_loss_pct <= -self.config.max_daily_loss_pct:
+                # Send alert first time it's hit
+                if not self.daily_loss_alert_sent:
+                    self.telegram.send(
+                        f"🚨 DAILY LOSS LIMIT HIT\n"
+                        f"Loss: ${self.daily_pnl:.2f} ({daily_loss_pct*100:.2f}%)\n"
+                        f"Limit: {self.config.max_daily_loss_pct*100:.1f}%\n"
+                        f"No new positions until daily reset"
+                    )
+                    self.daily_loss_alert_sent = True
                 return False, f"Daily loss limit hit ({daily_loss_pct*100:.2f}%)"
 
         # Check max concurrent positions
@@ -293,6 +315,7 @@ class RiskEngine:
             # Reset
             self.daily_pnl = 0.0
             self.closed_trades_today = []
+            self.daily_loss_alert_sent = False  # Reset alert flag
             self.daily_reset_time = self._get_next_utc_midnight()
 
     def save_positions(self, filepath: str = 'positions.json'):

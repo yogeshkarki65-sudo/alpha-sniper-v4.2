@@ -13,12 +13,14 @@ import time
 import schedule
 import signal
 import sys
+import argparse
+from datetime import datetime, timezone
 
 from config import get_config
 from utils import setup_logger
 from utils.telegram import TelegramNotifier
 from utils import helpers
-from exchange import ExchangeClient
+from exchange import create_exchange
 from risk_engine import RiskEngine
 from signals.scanner import Scanner
 
@@ -44,16 +46,20 @@ class AlphaSniperBot:
 
         # Initialize components
         self.telegram = TelegramNotifier(self.config, self.logger)
-        self.exchange = ExchangeClient(self.config, self.logger)
+        self.exchange = create_exchange(self.config, self.logger)  # Use factory
         self.risk_engine = RiskEngine(self.config, self.exchange, self.logger, self.telegram)
         self.scanner = Scanner(self.exchange, self.risk_engine, self.config, self.logger)
 
+        # Send startup notification
+        startup_msg = (
+            f"🚀 Alpha Sniper V4.2 started\n"
+            f"Mode: {'SIM' if self.config.sim_mode else 'LIVE'}\n"
+            f"Starting Equity: ${self.config.starting_equity:.2f}"
+        )
+        self.telegram.send(startup_msg)
+
         # Load existing positions
         self.risk_engine.load_positions('positions.json')
-
-        # Send startup notification
-        if not self.config.sim_mode:
-            self.telegram.send(f"🚀 Alpha Sniper V4.2 started in {mode_str} mode")
 
         # Running flag
         self.running = True
@@ -63,10 +69,15 @@ class AlphaSniperBot:
         Main trading cycle - runs every scan interval
         """
         try:
+            # Enhanced cycle header with key info
+            cycle_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            regime = self.risk_engine.current_regime or "UNKNOWN"
+            open_pos = len(self.risk_engine.open_positions)
+
             self.logger.info("")
-            self.logger.info("🔄" + "=" * 58)
-            self.logger.info("🔄 New trading cycle starting...")
-            self.logger.info("🔄" + "=" * 58)
+            self.logger.info("=" * 70)
+            self.logger.info(f"🔄 New cycle | t={cycle_time} | regime={regime} | sim={self.config.sim_mode} | equity=${self.risk_engine.current_equity:.2f} | open_positions={open_pos}")
+            self.logger.info("=" * 70)
 
             # 1. Check daily reset
             self.risk_engine.check_daily_reset()
@@ -367,6 +378,12 @@ def main():
     """
     Main entry point
     """
+    # Parse arguments
+    parser = argparse.ArgumentParser(description='Alpha Sniper V4.2 Trading Bot')
+    parser.add_argument('--once', action='store_true',
+                        help='Run a single cycle then exit (for testing)')
+    args = parser.parse_args()
+
     bot = AlphaSniperBot()
 
     # Handle graceful shutdown
@@ -379,8 +396,15 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
-    # Run bot
-    bot.run()
+    # Run mode
+    if args.once:
+        bot.logger.info("🧪 Running in --once test mode (single cycle)")
+        bot.trading_cycle()
+        bot.logger.info("✅ Test cycle complete, exiting")
+        bot.shutdown()
+    else:
+        # Normal scheduled mode
+        bot.run()
 
 
 if __name__ == "__main__":
