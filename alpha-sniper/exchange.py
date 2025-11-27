@@ -14,6 +14,7 @@ class SimulatedExchange:
     """
     Simulated exchange for SIM_MODE
     No real API calls, generates fake but coherent data
+    FIX: Maintains consistent prices across calls with gradual updates
     """
     def __init__(self, config, logger):
         self.config = config
@@ -24,6 +25,16 @@ class SimulatedExchange:
         self.fake_positions = []
         self.base_price_btc = 50000.0
         self.fake_markets = self._generate_fake_markets()
+
+        # === PRICE CACHE FIX ===
+        # Cache klines data to ensure price continuity
+        self.klines_cache = {}  # {symbol: {timeframe: [(ts, o, h, l, c, v), ...]}}
+        self.cache_timestamps = {}  # {symbol: {timeframe: last_update_ts}}
+        self.cache_lifetime = 60  # seconds - update prices every 60s to simulate market movement
+
+        # Initialize current prices (seeded from symbol hash for consistency)
+        self.current_prices = {}  # {symbol: price}
+        self._initialize_prices()
 
     def _generate_fake_markets(self):
         """Generate fake market data for simulation"""
@@ -54,19 +65,89 @@ class SimulatedExchange:
 
         return markets
 
+    def _initialize_prices(self):
+        """Initialize consistent starting prices for all symbols"""
+        # BTC starts at base_price_btc
+        self.current_prices['BTC/USDT'] = self.base_price_btc
+
+        # Altcoins get consistent prices based on symbol hash
+        alts = ['ETH', 'BNB', 'SOL', 'ADA', 'XRP', 'DOT', 'AVAX', 'MATIC', 'LINK', 'UNI',
+                'ATOM', 'LTC', 'BCH', 'ETC', 'FIL', 'AAVE', 'CRV', 'SNX', 'SUSHI', 'COMP']
+
+        for alt in alts:
+            symbol = f'{alt}/USDT'
+            # Use symbol hash for consistent but varied prices
+            symbol_hash = abs(hash(symbol))
+            base_price = 10 + (symbol_hash % 500) / 10  # Range: $10 - $60
+            self.current_prices[symbol] = base_price
+
+    def _should_update_cache(self, symbol: str, timeframe: str) -> bool:
+        """Check if cache should be updated"""
+        if symbol not in self.cache_timestamps:
+            return True
+        if timeframe not in self.cache_timestamps[symbol]:
+            return True
+
+        last_update = self.cache_timestamps[symbol][timeframe]
+        return (time.time() - last_update) > self.cache_lifetime
+
+    def _update_price(self, symbol: str):
+        """Gradually update current price to simulate market movement"""
+        if symbol not in self.current_prices:
+            self._initialize_prices()
+
+        current = self.current_prices[symbol]
+
+        # Small random walk: ±0.1% to ±0.5% per update (every 60s)
+        change_pct = random.uniform(-0.005, 0.005)  # -0.5% to +0.5%
+
+        # Add slight upward bias for trending markets
+        if symbol != 'BTC/USDT':
+            symbol_hash = abs(hash(symbol)) % 100
+            if symbol_hash < 30:  # 30% get upward bias
+                change_pct += random.uniform(0.001, 0.003)  # +0.1% to +0.3% bias
+
+        new_price = current * (1 + change_pct)
+        self.current_prices[symbol] = new_price
+
     def get_markets(self):
         """Return fake markets"""
         return self.fake_markets
 
     def get_klines(self, symbol: str, timeframe: str, limit: int = 200):
         """
-        Generate fake OHLCV data
+        Generate fake OHLCV data with CACHING for price continuity
         Returns: list of [timestamp, open, high, low, close, volume]
         """
+        # Check if we should update cache
+        should_update = self._should_update_cache(symbol, timeframe)
+
+        # Initialize cache structure if needed
+        if symbol not in self.klines_cache:
+            self.klines_cache[symbol] = {}
+            self.cache_timestamps[symbol] = {}
+
+        # Return cached data if still valid
+        if not should_update and timeframe in self.klines_cache[symbol]:
+            cached = self.klines_cache[symbol][timeframe]
+            # Return last 'limit' candles
+            return cached[-limit:] if len(cached) >= limit else cached
+
+        # Generate or update klines
         if symbol == 'BTC/USDT':
-            return self._generate_btc_klines(timeframe, limit)
+            klines = self._generate_btc_klines(timeframe, limit)
         else:
-            return self._generate_alt_klines(symbol, timeframe, limit)
+            klines = self._generate_alt_klines(symbol, timeframe, limit)
+
+        # Cache the data
+        self.klines_cache[symbol][timeframe] = klines
+        self.cache_timestamps[symbol][timeframe] = time.time()
+
+        # Update current price gradually
+        if should_update:
+            self._update_price(symbol)
+
+        return klines[-limit:]
 
     def _generate_btc_klines(self, timeframe: str, limit: int):
         """Generate BTC fake data with gradual uptrend and market cycles"""
@@ -76,102 +157,117 @@ class SimulatedExchange:
         tf_map = {'1d': 86400000, '1h': 3600000, '15m': 900000}
         tf_ms = tf_map.get(timeframe, 3600000)
 
+        # Use current price as the latest price for continuity
+        latest_price = self.current_prices.get('BTC/USDT', self.base_price_btc)
+
         ohlcv = []
-        current_price = self.base_price_btc
+        # Work backwards from current price
+        current_price = latest_price
 
-        # Generate older candles first
-        for i in range(limit, 0, -1):
-            ts = now - (i * tf_ms)
+        # Generate candles from oldest to newest
+        prices = [current_price]
+        for i in range(limit - 1):
+            # Work backwards: reverse the trend to build history
+            change_pct = random.uniform(-0.005, 0.002)  # Slight downward bias when going back in time
+            current_price = current_price / (1 + change_pct)
+            prices.append(current_price)
 
-            # Gradual uptrend: +0.05% per candle on average
-            trend_move = current_price * 0.0005
+        # Reverse so oldest is first
+        prices.reverse()
 
-            # Add market cycles (trending, consolidation, pullback)
-            cycle_position = i % 50  # 50-candle cycles
-            if cycle_position < 20:  # Trending phase
-                noise = random.uniform(-50, 150)  # Upward bias
-            elif cycle_position < 35:  # Consolidation phase
-                noise = random.uniform(-100, 100)  # Sideways
-            else:  # Pullback phase
-                noise = random.uniform(-150, 50)  # Downward bias
+        # Build OHLCV candles
+        for i in range(limit):
+            ts = now - ((limit - i) * tf_ms)
+            price = prices[i]
 
-            current_price = current_price + trend_move + noise
-
-            o = current_price
-            h = current_price * random.uniform(1.002, 1.015)
-            l = current_price * random.uniform(0.985, 0.998)
-            c = current_price * random.uniform(0.995, 1.005)
+            o = price
+            h = price * random.uniform(1.001, 1.008)  # Smaller intrabar moves
+            l = price * random.uniform(0.992, 0.999)
+            c = price * random.uniform(0.998, 1.002)  # Close near open
             v = random.uniform(2000, 8000)
 
             ohlcv.append([ts, o, h, l, c, v])
 
+        # Ensure the last candle close matches current price
+        if ohlcv:
+            ohlcv[-1][4] = latest_price  # Set last close to current price
+
         return ohlcv
 
     def _generate_alt_klines(self, symbol: str, timeframe: str, limit: int):
-        """Generate altcoin fake data with occasional trends and volume spikes"""
+        """Generate altcoin fake data with price continuity"""
         now = int(datetime.now().timestamp() * 1000)
 
         tf_map = {'1d': 86400000, '1h': 3600000, '15m': 900000}
         tf_ms = tf_map.get(timeframe, 3600000)
 
-        # Base price varies by coin
-        base = random.uniform(10, 100)
+        # Use current price for this symbol, ensuring continuity
+        latest_price = self.current_prices.get(symbol)
+        if latest_price is None:
+            # First time - initialize
+            self._initialize_prices()
+            latest_price = self.current_prices.get(symbol, 20.0)
 
         # Hash symbol to get consistent behavior per coin
-        symbol_hash = hash(symbol) % 100
+        symbol_hash = abs(hash(symbol)) % 100
 
-        # Determine if this coin is in an uptrend, downtrend, or sideways
+        # Determine trend characteristics
         if symbol_hash < 30:  # 30% trending up
-            trend = 0.008  # +0.8% per candle - STRONG uptrend
-            vol_multiplier = 2.5  # Higher base volume
+            vol_multiplier = 2.5
         elif symbol_hash < 50:  # 20% trending down
-            trend = -0.006
             vol_multiplier = 1.5
         else:  # 50% sideways
-            trend = 0
             vol_multiplier = 1.0
 
+        # Build price history working backwards from current price
+        current_price = latest_price
+        prices = [current_price]
+
+        for i in range(limit - 1):
+            # Work backwards with small random moves
+            change_pct = random.uniform(-0.008, 0.005)  # Slight downward bias going back
+            current_price = current_price / (1 + change_pct)
+            prices.append(current_price)
+
+        # Reverse so oldest is first
+        prices.reverse()
+
+        # Build OHLCV candles
         ohlcv = []
-        current_price = base
-
-        for i in range(limit, 0, -1):
-            ts = now - (i * tf_ms)
-
-            # Apply accelerating trend (stronger in recent candles)
-            trend_strength = 1.0 + (0.5 * (limit - i) / limit)  # 1.0 to 1.5x
-            current_price = current_price * (1 + (trend * trend_strength))
-
-            # Less noise for cleaner trends
-            noise = random.uniform(0.99, 1.01)
-            price = current_price * noise
+        for i in range(limit):
+            ts = now - ((limit - i) * tf_ms)
+            price = prices[i]
 
             o = price
-            h = price * random.uniform(1.005, 1.02)
-            l = price * random.uniform(0.98, 0.995)
+            h = price * random.uniform(1.002, 1.015)
+            l = price * random.uniform(0.985, 0.998)
             c = price * random.uniform(0.995, 1.005)
 
-            # Volume increases with trend - recent candles have MUCH higher volume
-            recency_factor = 1.0 + (2.0 * (limit - i) / limit)  # 1.0x to 3.0x
+            # Volume increases with recency
+            recency_factor = 1.0 + (2.0 * i / limit)  # 1.0x to 3.0x
             base_vol = random.uniform(300, 600) * vol_multiplier * recency_factor
 
-            # Frequent volume spikes in recent candles
-            if i <= 10 or random.random() < 0.25:  # Last 10 candles OR 25% chance
-                v = base_vol * random.uniform(1.8, 3.5)  # Big spike
+            # Occasional volume spikes
+            if i >= limit - 10 or random.random() < 0.15:
+                v = base_vol * random.uniform(1.5, 3.0)
             else:
                 v = base_vol
 
             ohlcv.append([ts, o, h, l, c, v])
 
+        # Ensure the last candle close matches current price
+        if ohlcv:
+            ohlcv[-1][4] = latest_price
+
         return ohlcv
 
     def get_ticker(self, symbol: str):
-        """Generate fake ticker"""
-        # Get recent price from klines
-        klines = self.get_klines(symbol, '1h', limit=2)
-        if not klines:
-            return None
+        """Generate fake ticker using current price (with caching for continuity)"""
+        # Use current price directly (updated every 60s by cache system)
+        if symbol not in self.current_prices:
+            self._initialize_prices()
 
-        last_price = klines[-1][4]  # close
+        last_price = self.current_prices[symbol]
 
         return {
             'symbol': symbol,
@@ -394,11 +490,121 @@ class RealExchange:
 
 
 # Factory function
+class DataOnlyMexcExchange:
+    """
+    Data-only exchange for SIM mode with LIVE_DATA
+    Uses real MEXC market data via public API (no authentication)
+    Does NOT place real orders - for paper trading only
+    """
+    def __init__(self, config, logger):
+        self.config = config
+        self.logger = logger
+
+        # Initialize MEXC client in public mode (no API keys required)
+        self.client = ccxt.mexc({
+            'timeout': 8000,
+            'enableRateLimit': True,
+        })
+
+        self.logger.info("🌐 DataOnlyMexcExchange initialized (REAL MEXC data, PAPER trading only)")
+
+    def _with_retries(self, func, label: str, max_attempts: int = 3, delay_sec: float = 2.0):
+        """Retry wrapper for network calls with exponential backoff"""
+        for attempt in range(max_attempts):
+            try:
+                return func()
+            except Exception as e:
+                self.logger.error(f"Error on attempt {attempt + 1}/{max_attempts}: {label} - {repr(e)}")
+                if attempt < max_attempts - 1:
+                    # Exponential backoff: 2s, 4s, 8s
+                    backoff = delay_sec * (2 ** attempt)
+                    time.sleep(backoff)
+
+        self.logger.error(f"Max retries exceeded for: {label}")
+        return None
+
+    def get_markets(self):
+        """Load markets from MEXC (public endpoint)"""
+        return self._with_retries(lambda: self.client.load_markets(), "load_markets")
+
+    def get_klines(self, symbol: str, timeframe: str, limit: int = 200):
+        """Fetch OHLCV from MEXC (public endpoint)"""
+        return self._with_retries(
+            lambda: self.client.fetch_ohlcv(symbol, timeframe, limit=limit),
+            f"fetch_ohlcv {symbol} {timeframe}"
+        )
+
+    def get_ticker(self, symbol: str):
+        """Fetch ticker from MEXC (public endpoint)"""
+        return self._with_retries(lambda: self.client.fetch_ticker(symbol), f"fetch_ticker {symbol}")
+
+    def get_orderbook(self, symbol: str):
+        """Fetch orderbook from MEXC (public endpoint)"""
+        return self._with_retries(lambda: self.client.fetch_order_book(symbol), f"fetch_orderbook {symbol}")
+
+    def get_funding_rate(self, symbol: str):
+        """Fetch funding rate from MEXC (public endpoint)"""
+        try:
+            funding = self._with_retries(
+                lambda: self.client.fetch_funding_rate(symbol),
+                f"fetch_funding_rate {symbol}"
+            )
+            if funding:
+                return funding.get('fundingRate', 0)
+        except:
+            pass
+        return 0
+
+    def get_liquidity_metrics(self, symbol: str):
+        """
+        === UPGRADE D: Liquidity-Aware Position Sizing ===
+        Calculate liquidity metrics from real orderbook data
+        """
+        try:
+            ticker = self.get_ticker(symbol)
+            orderbook = self.get_orderbook(symbol)
+
+            if not ticker or not orderbook:
+                return {'spread_pct': 1.0, 'depth_usd': 5000}
+
+            # Calculate spread
+            bid = ticker.get('bid', 0)
+            ask = ticker.get('ask', 0)
+            last = ticker.get('last', 1)
+
+            spread_pct = ((ask - bid) / last) * 100 if last > 0 and bid > 0 and ask > 0 else 0.5
+
+            # Calculate depth (sum of top 10 bid/ask levels)
+            depth_usd = 0
+            bids = orderbook.get('bids', [])[:10]
+            asks = orderbook.get('asks', [])[:10]
+
+            for price, amount in bids:
+                depth_usd += price * amount
+
+            for price, amount in asks:
+                depth_usd += price * amount
+
+            return {
+                'spread_pct': spread_pct,
+                'depth_usd': depth_usd
+            }
+        except Exception as e:
+            self.logger.debug(f"Error getting liquidity metrics for {symbol}: {e}")
+            return {'spread_pct': 1.0, 'depth_usd': 5000}
+
+
 def create_exchange(config, logger):
     """
-    Factory to create appropriate exchange based on SIM_MODE
+    Factory to create appropriate exchange based on SIM_MODE and SIM_DATA_SOURCE
     """
     if config.sim_mode:
-        return SimulatedExchange(config, logger)
+        if config.sim_data_source == "LIVE_DATA":
+            logger.info(f"📡 SIM_MODE=True | SIM_DATA_SOURCE=LIVE_DATA | Using DataOnlyMexcExchange (REAL MEXC market data, PAPER ONLY)")
+            return DataOnlyMexcExchange(config, logger)
+        else:
+            logger.info(f"📡 SIM_MODE=True | SIM_DATA_SOURCE=FAKE | Using SimulatedExchange (synthetic data)")
+            return SimulatedExchange(config, logger)
     else:
+        logger.info(f"📡 SIM_MODE=False | Using RealExchange (LIVE trading)")
         return RealExchange(config, logger)

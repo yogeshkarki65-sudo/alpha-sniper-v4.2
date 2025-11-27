@@ -244,8 +244,11 @@ class AlphaSniperBot:
                     self.logger.debug(f"❌ Position size too small for {signal['symbol']}: ${size_usd:.2f} (min: ${min_position_size:.2f})")
                     continue
 
-                # Calculate risk %
+                # Calculate risk % and quantities
                 risk_pct = self.risk_engine.get_risk_per_trade(signal.get('engine', 'standard'))
+                equity_at_entry = self.risk_engine.current_equity
+                initial_risk_usd = equity_at_entry * risk_pct
+                qty = size_usd / entry_price if entry_price > 0 else 0
 
                 # Create position object
                 position = {
@@ -257,7 +260,10 @@ class AlphaSniperBot:
                     'tp_2r': signal.get('tp_2r', 0),
                     'tp_4r': signal.get('tp_4r', 0),
                     'size_usd': size_usd,
+                    'qty': qty,
                     'risk_pct': risk_pct,
+                    'initial_risk_usd': initial_risk_usd,
+                    'equity_at_entry': equity_at_entry,
                     'score': signal.get('score', 0),
                     'regime': signal.get('regime', ''),
                     'timestamp_open': time.time(),
@@ -266,15 +272,19 @@ class AlphaSniperBot:
 
                 # Place order (SIM or LIVE)
                 if self.config.sim_mode:
-                    # Simulated order - just log
+                    # Detailed SIM logging
                     self.logger.info(
-                        f"✅ [SIM] Opening {position['side']} | "
-                        f"{position['symbol']} | "
-                        f"Size: ${size_usd:.2f} | "
-                        f"Entry: ${entry_price:.6f} | "
-                        f"SL: ${stop_loss:.6f} | "
-                        f"Score: {position['score']} | "
-                        f"Engine: {position['engine']}"
+                        f"✅ [SIM-OPEN] {position['symbol']} {position['side']} | "
+                        f"equity=${equity_at_entry:.2f} | "
+                        f"regime={position['regime']} | "
+                        f"risk={risk_pct*100:.3f}% | "
+                        f"risk_usd=${initial_risk_usd:.2f} | "
+                        f"size_usd=${size_usd:.2f} | "
+                        f"qty={qty:.6f} | "
+                        f"entry={entry_price:.6f} | "
+                        f"stop={stop_loss:.6f} | "
+                        f"engine={position['engine']} | "
+                        f"score={position['score']}"
                     )
 
                     # Add position

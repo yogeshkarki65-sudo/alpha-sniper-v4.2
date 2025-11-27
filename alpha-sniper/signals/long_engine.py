@@ -147,10 +147,10 @@ class LongEngine:
                 # Apply boost if conditions met
                 if atr_expansion and rsi_divergence:
                     score += self.config.sideways_coil_score_boost
-                    self.logger.debug(
-                        f"[SidewaysCoil] {symbol} +{self.config.sideways_coil_score_boost} boost | "
-                        f"ATR: {atr_current:.4f} vs median {atr_median_24h:.4f} | "
-                        f"RSI divergence detected"
+                    self.logger.info(
+                        f"[CoilBoost] +{self.config.sideways_coil_score_boost} score | "
+                        f"symbol={symbol} | regime=SIDEWAYS | "
+                        f"ATR_expansion={atr_current/atr_median_24h:.2f}x | RSI_div=True"
                     )
 
         # Check if meets minimum score

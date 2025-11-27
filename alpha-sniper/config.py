@@ -5,6 +5,7 @@ class Config:
     def __init__(self):
         load_dotenv()
         self.sim_mode = self.parse_bool(os.getenv("SIM_MODE", "true"))
+        self.sim_data_source = os.getenv("SIM_DATA_SOURCE", "FAKE").upper()  # FAKE or LIVE_DATA
         self.mexc_api_key = os.getenv("MEXC_API_KEY", "")
         self.mexc_secret_key = os.getenv("MEXC_SECRET_KEY", "")
         self.telegram_bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "")

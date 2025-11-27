@@ -351,11 +351,20 @@ class RiskEngine:
                 # Apply scaling
                 final_size = base_size * liquidity_factor
 
-                self.logger.debug(
-                    f"[LiquiditySizing] {symbol} base=${base_size:.2f}, "
-                    f"spread={spread_pct:.2f}%, depth=${depth_usd:.0f}, "
-                    f"factor={liquidity_factor:.2f}, final=${final_size:.2f}"
-                )
+                # Only log if actually scaling down significantly
+                if liquidity_factor < 0.95:
+                    self.logger.info(
+                        f"[LiquidityGuard] SCALE DOWN symbol={symbol} | "
+                        f"requested_size=${base_size:.2f} | adjusted_size=${final_size:.2f} | "
+                        f"spread={spread_pct:.2f}% | depth=${depth_usd:.0f} | "
+                        f"factor={liquidity_factor:.2f}"
+                    )
+                else:
+                    self.logger.debug(
+                        f"[LiquiditySizing] {symbol} base=${base_size:.2f}, "
+                        f"spread={spread_pct:.2f}%, depth=${depth_usd:.0f}, "
+                        f"factor={liquidity_factor:.2f}, final=${final_size:.2f}"
+                    )
 
                 return final_size
 
@@ -398,9 +407,12 @@ class RiskEngine:
             )
 
             if bucket_count >= self.config.max_correlated_positions:
-                self.logger.debug(
-                    f"[CorrelationGuard] Rejected {symbol}: bucket '{bucket}' "
-                    f"already has {bucket_count} positions (max {self.config.max_correlated_positions})"
+                # Get existing symbols in this bucket
+                bucket_symbols = [p.get('symbol') for p in self.open_positions if self.get_symbol_bucket(p.get('symbol', '')) == bucket]
+                self.logger.info(
+                    f"[CorrelationGuard] REJECT symbol={symbol} | "
+                    f"bucket={bucket} already has {bucket_count} positions {bucket_symbols} | "
+                    f"max={self.config.max_correlated_positions}"
                 )
                 return False, f"Bucket {bucket} limit reached ({bucket_count}/{self.config.max_correlated_positions})"
 
@@ -444,26 +456,33 @@ class RiskEngine:
     def close_position(self, position: Dict, exit_price: float, reason: str):
         """
         Close a position and update PnL
+        FIX: Use qty for accurate PnL, use initial_risk_usd for R-multiple
         """
         entry_price = position['entry_price']
-        size_usd = position.get('size_usd', 0)
+        qty = position.get('qty', 0)
         side = position['side']
+        initial_risk_usd = position.get('initial_risk_usd', 0)
 
-        # Calculate PnL
+        # Calculate PnL using qty (FIXED)
         if side == 'long':
-            pnl_pct = ((exit_price / entry_price) - 1) * 100
+            pnl_usd = (exit_price - entry_price) * qty
         else:  # short
-            pnl_pct = ((entry_price / exit_price) - 1) * 100
+            pnl_usd = (entry_price - exit_price) * qty
 
-        pnl_usd = size_usd * (pnl_pct / 100)
+        # Calculate PnL percentage (relative to size_usd at entry)
+        size_usd = position.get('size_usd', 0)
+        pnl_pct = (pnl_usd / size_usd) * 100 if size_usd > 0 else 0
 
-        # Calculate R-multiple
-        sl_price = position['stop_loss']
-        if side == 'long':
-            risk_pct_price = abs((entry_price - sl_price) / entry_price)
-            r_multiple = pnl_pct / (risk_pct_price * 100) if risk_pct_price > 0 else 0
+        # Calculate R-multiple (FIXED: use initial_risk_usd)
+        if initial_risk_usd > 0:
+            r_multiple = pnl_usd / initial_risk_usd
         else:
-            risk_pct_price = abs((sl_price - entry_price) / entry_price)
+            # Fallback to old method if initial_risk_usd not set
+            sl_price = position['stop_loss']
+            if side == 'long':
+                risk_pct_price = abs((entry_price - sl_price) / entry_price)
+            else:
+                risk_pct_price = abs((sl_price - entry_price) / entry_price)
             r_multiple = pnl_pct / (risk_pct_price * 100) if risk_pct_price > 0 else 0
 
         # Update equity and daily PnL
@@ -474,11 +493,24 @@ class RiskEngine:
         hold_time_sec = time.time() - position['timestamp_open']
         hold_time_hours = hold_time_sec / 3600
 
-        self.logger.info(
-            f"🔴 Position closed | {position['symbol']} {position['side']} | "
-            f"PnL: ${pnl_usd:.2f} ({pnl_pct:.2f}%) | R: {r_multiple:.2f}R | "
-            f"Hold: {hold_time_hours:.1f}h | Reason: {reason}"
-        )
+        # Detailed SIM logging
+        if self.config.sim_mode:
+            self.logger.info(
+                f"🔴 [SIM-CLOSE] {position['symbol']} {position['side']} | "
+                f"exit={exit_price:.6f} | "
+                f"pnl_usd=${pnl_usd:.2f} | "
+                f"pnl_pct={pnl_pct:.2f}% | "
+                f"risk_usd=${initial_risk_usd:.2f} | "
+                f"R={r_multiple:.2f}R | "
+                f"hold={hold_time_hours:.1f}h | "
+                f"reason={reason}"
+            )
+        else:
+            self.logger.info(
+                f"🔴 Position closed | {position['symbol']} {position['side']} | "
+                f"PnL: ${pnl_usd:.2f} ({pnl_pct:.2f}%) | R: {r_multiple:.2f}R | "
+                f"Hold: {hold_time_hours:.1f}h | Reason: {reason}"
+            )
 
         # Send Telegram alert for significant trades
         if abs(pnl_pct) > 2 or abs(r_multiple) > 1.5:
@@ -502,6 +534,12 @@ class RiskEngine:
             'timestamp_close': time.time()
         }
         self.closed_trades_today.append(closed_trade)
+
+        # Log to CSV
+        try:
+            helpers.log_trade_to_csv(closed_trade)
+        except Exception as e:
+            self.logger.error(f"Error logging trade to CSV: {e}")
 
         # Remove from open positions
         if position in self.open_positions:

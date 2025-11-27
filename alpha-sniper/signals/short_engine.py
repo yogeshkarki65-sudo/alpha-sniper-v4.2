@@ -62,11 +62,18 @@ class ShortEngine:
         # Only short when funding is positive enough (we get paid to short)
         if self.config.short_funding_overlay_enabled:
             if funding_rate < self.config.short_min_funding_8h:
-                self.logger.debug(
-                    f"[ShortFunding] Rejected {symbol}: "
-                    f"funding {funding_rate:.5f} < min {self.config.short_min_funding_8h:.5f}"
+                self.logger.info(
+                    f"[ShortFundingOverlay] REJECT short | "
+                    f"symbol={symbol} | "
+                    f"funding={funding_rate:.5f} < min={self.config.short_min_funding_8h:.5f}"
                 )
                 return None
+            else:
+                self.logger.info(
+                    f"[ShortFundingOverlay] OK short | "
+                    f"symbol={symbol} | "
+                    f"funding={funding_rate:.5f} >= min={self.config.short_min_funding_8h:.5f}"
+                )
 
         # Current price
         current_price = df_15m['close'].iloc[-1]
