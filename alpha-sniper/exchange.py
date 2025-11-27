@@ -197,6 +197,34 @@ class SimulatedExchange:
         """Return fake funding rate (low, so shorts aren't rejected)"""
         return random.uniform(-0.0001, 0.0002)
 
+    def get_liquidity_metrics(self, symbol: str):
+        """
+        === UPGRADE D: Liquidity-Aware Position Sizing ===
+        Return fake but realistic liquidity metrics
+        """
+        ticker = self.get_ticker(symbol)
+        if not ticker:
+            return {'spread_pct': 1.0, 'depth_usd': 5000}
+
+        spread_pct = ((ticker['ask'] - ticker['bid']) / ticker['last']) * 100 if ticker['last'] > 0 else 0.5
+
+        # Simulate varying liquidity: some coins have better depth than others
+        symbol_hash = hash(symbol) % 100
+        if symbol_hash < 30:
+            # Good liquidity
+            depth_usd = random.uniform(15000, 30000)
+        elif symbol_hash < 70:
+            # Medium liquidity
+            depth_usd = random.uniform(8000, 18000)
+        else:
+            # Poor liquidity
+            depth_usd = random.uniform(2000, 10000)
+
+        return {
+            'spread_pct': spread_pct,
+            'depth_usd': depth_usd
+        }
+
     def create_order(self, symbol, type, side, amount, price=None, params=None):
         """Simulate order creation"""
         ticker = self.get_ticker(symbol)
@@ -302,6 +330,45 @@ class RealExchange:
         except:
             pass
         return 0
+
+    def get_liquidity_metrics(self, symbol: str):
+        """
+        === UPGRADE D: Liquidity-Aware Position Sizing ===
+        Calculate liquidity metrics from real orderbook data
+        """
+        try:
+            ticker = self.get_ticker(symbol)
+            orderbook = self.get_orderbook(symbol)
+
+            if not ticker or not orderbook:
+                return {'spread_pct': 1.0, 'depth_usd': 5000}
+
+            # Calculate spread
+            bid = ticker.get('bid', 0)
+            ask = ticker.get('ask', 0)
+            last = ticker.get('last', 1)
+
+            spread_pct = ((ask - bid) / last) * 100 if last > 0 and bid > 0 and ask > 0 else 0.5
+
+            # Calculate depth (sum of top 10 bid/ask levels)
+            depth_usd = 0
+            bids = orderbook.get('bids', [])[:10]
+            asks = orderbook.get('asks', [])[:10]
+
+            for price, amount in bids:
+                depth_usd += price * amount
+
+            for price, amount in asks:
+                depth_usd += price * amount
+
+            return {
+                'spread_pct': spread_pct,
+                'depth_usd': depth_usd
+            }
+
+        except Exception as e:
+            self.logger.debug(f"Error getting liquidity metrics for {symbol}: {e}")
+            return {'spread_pct': 1.0, 'depth_usd': 5000}
 
     def create_order(self, symbol, type, side, amount, price=None, params=None):
         """Create real order on MEXC"""

@@ -44,6 +44,16 @@ class AlphaSniperBot:
         self.logger.info(f"💰 Starting Equity: ${self.config.starting_equity:.2f}")
         self.logger.info("=" * 60)
 
+        # Log V4.2 Overlay Status
+        self.logger.info("")
+        self.logger.info("📋 V4.2 Overlay Status:")
+        self.logger.info(f"   Sideways Coil Boost: {'ENABLED' if self.config.sideways_coil_enabled else 'DISABLED'}")
+        self.logger.info(f"   Short Funding Overlay: {'ENABLED' if self.config.short_funding_overlay_enabled else 'DISABLED'}")
+        self.logger.info(f"   Pump Allocation Feedback: {'ENABLED' if self.config.pump_feedback_enabled else 'DISABLED'}")
+        self.logger.info(f"   Liquidity-Aware Sizing: {'ENABLED' if self.config.liquidity_sizing_enabled else 'DISABLED'}")
+        self.logger.info(f"   Correlation Guard: {'ENABLED' if self.config.correlation_limit_enabled else 'DISABLED'}")
+        self.logger.info("")
+
         # Initialize components
         self.telegram = TelegramNotifier(self.config, self.logger)
         self.exchange = create_exchange(self.config, self.logger)  # Use factory

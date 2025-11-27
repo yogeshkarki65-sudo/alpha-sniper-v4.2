@@ -15,6 +15,74 @@ class RiskEngine:
     """
     Central risk management and regime detection engine
     """
+
+    # === UPGRADE E: Correlation-Aware Portfolio Heat ===
+    # Static bucket mapping for crypto assets
+    CORRELATION_BUCKETS = {
+        # MEME coins
+        'DOGE/USDT': 'MEME',
+        'SHIB/USDT': 'MEME',
+        'PEPE/USDT': 'MEME',
+        'FLOKI/USDT': 'MEME',
+        'BONK/USDT': 'MEME',
+        'WIF/USDT': 'MEME',
+
+        # Layer 1 blockchains
+        'ETH/USDT': 'L1',
+        'BNB/USDT': 'L1',
+        'SOL/USDT': 'L1',
+        'ADA/USDT': 'L1',
+        'AVAX/USDT': 'L1',
+        'DOT/USDT': 'L1',
+        'ATOM/USDT': 'L1',
+        'NEAR/USDT': 'L1',
+        'FTM/USDT': 'L1',
+        'ALGO/USDT': 'L1',
+
+        # Layer 2 / Scaling
+        'MATIC/USDT': 'L2',
+        'ARB/USDT': 'L2',
+        'OP/USDT': 'L2',
+        'IMX/USDT': 'L2',
+        'LRC/USDT': 'L2',
+
+        # DeFi / DEX
+        'UNI/USDT': 'DEX',
+        'SUSHI/USDT': 'DEX',
+        'CAKE/USDT': 'DEX',
+        'DYDX/USDT': 'DEX',
+        'GMX/USDT': 'DEX',
+        'AAVE/USDT': 'DEFI',
+        'COMP/USDT': 'DEFI',
+        'CRV/USDT': 'DEFI',
+        'SNX/USDT': 'DEFI',
+        'MKR/USDT': 'DEFI',
+
+        # AI / Data
+        'FET/USDT': 'AI',
+        'AGIX/USDT': 'AI',
+        'RNDR/USDT': 'AI',
+        'GRT/USDT': 'DATA',
+        'LINK/USDT': 'ORACLE',
+
+        # Gaming / Metaverse
+        'SAND/USDT': 'GAMING',
+        'MANA/USDT': 'GAMING',
+        'AXS/USDT': 'GAMING',
+        'GALA/USDT': 'GAMING',
+
+        # Legacy / Payment
+        'LTC/USDT': 'LEGACY',
+        'BCH/USDT': 'LEGACY',
+        'ETC/USDT': 'LEGACY',
+        'XRP/USDT': 'PAYMENT',
+        'XLM/USDT': 'PAYMENT',
+
+        # Storage / Infrastructure
+        'FIL/USDT': 'STORAGE',
+        'AR/USDT': 'STORAGE',
+    }
+
     def __init__(self, config, exchange, logger, telegram):
         self.config = config
         self.exchange = exchange
@@ -41,12 +109,108 @@ class RiskEngine:
 
         self.logger.info(f"💰 RiskEngine initialized | Starting equity: ${self.starting_equity:.2f}")
 
+    def get_symbol_bucket(self, symbol: str) -> str:
+        """
+        === UPGRADE E: Correlation-Aware Portfolio Heat ===
+        Get correlation bucket for a symbol
+        Returns: bucket name (str) or 'OTHER' if not found
+        """
+        return self.CORRELATION_BUCKETS.get(symbol, 'OTHER')
+
     def _get_next_utc_midnight(self) -> float:
         """Get timestamp of next UTC midnight"""
         now = datetime.now(timezone.utc)
         tomorrow = now.replace(hour=0, minute=0, second=0, microsecond=0)
         tomorrow = tomorrow.timestamp() + 86400  # Next day
         return tomorrow
+
+    def get_pump_allocation_slice(self) -> tuple[float, float]:
+        """
+        === UPGRADE C: Pump Engine Allocation Feedback Loop ===
+
+        Dynamically adjust pump allocation based on recent pump performance.
+
+        Returns: (min_allocation, max_allocation) as fractions (0.0-1.0)
+        """
+        if not self.config.pump_feedback_enabled:
+            # Return base allocations if feedback disabled
+            return (self.config.pump_allocation_min, self.config.pump_allocation_max)
+
+        try:
+            import os
+            import csv
+
+            trade_log_path = 'logs/v4_trade_scores.csv'
+
+            # Check if log file exists
+            if not os.path.exists(trade_log_path):
+                self.logger.debug("[PumpFeedback] Trade log not found, using base allocation")
+                return (self.config.pump_allocation_min_base, self.config.pump_allocation_max_base)
+
+            # Read last N pump trades
+            pump_trades = []
+            with open(trade_log_path, 'r') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    if row.get('engine', '').lower() == 'pump':
+                        try:
+                            r_multiple = float(row.get('r_multiple', 0) or 0)
+                            pump_trades.append(r_multiple)
+                        except (ValueError, TypeError):
+                            continue
+
+            # Get last N trades
+            lookback = self.config.pump_feedback_lookback
+            recent_pump_trades = pump_trades[-lookback:] if len(pump_trades) > lookback else pump_trades
+
+            # Not enough data yet
+            if len(recent_pump_trades) < lookback:
+                self.logger.debug(
+                    f"[PumpFeedback] Only {len(recent_pump_trades)}/{lookback} trades, "
+                    f"using base allocation"
+                )
+                return (self.config.pump_allocation_min_base, self.config.pump_allocation_max_base)
+
+            # Calculate average R
+            avg_r = sum(recent_pump_trades) / len(recent_pump_trades)
+
+            # Adjust allocation based on performance
+            base_min = self.config.pump_allocation_min_base
+            base_max = self.config.pump_allocation_max_base
+            floor = self.config.pump_allocation_min_floor
+            ceil = self.config.pump_allocation_max_ceil
+
+            if avg_r < self.config.pump_feedback_low_r_thres:
+                # Cold performance - reduce allocation
+                adjustment = (self.config.pump_feedback_low_r_thres - avg_r) / self.config.pump_feedback_low_r_thres
+                adjustment = min(adjustment, 1.0)  # Cap at 100% reduction
+
+                min_alloc = max(floor, base_min - (base_min - floor) * adjustment)
+                max_alloc = max(floor, base_max - (base_max - floor) * adjustment)
+
+            elif avg_r > self.config.pump_feedback_high_r_thres:
+                # Hot performance - increase allocation
+                adjustment = (avg_r - self.config.pump_feedback_high_r_thres) / self.config.pump_feedback_high_r_thres
+                adjustment = min(adjustment, 1.0)  # Cap at 100% increase
+
+                min_alloc = min(ceil, base_min + (ceil - base_min) * adjustment)
+                max_alloc = min(ceil, base_max + (ceil - base_max) * adjustment)
+
+            else:
+                # Neutral performance - use base
+                min_alloc = base_min
+                max_alloc = base_max
+
+            self.logger.info(
+                f"[PumpFeedback] avg_R={avg_r:.2f} ({len(recent_pump_trades)} trades) | "
+                f"slice={min_alloc:.0%}-{max_alloc:.0%}"
+            )
+
+            return (min_alloc, max_alloc)
+
+        except Exception as e:
+            self.logger.error(f"[PumpFeedback] Error calculating allocation: {e}")
+            return (self.config.pump_allocation_min_base, self.config.pump_allocation_max_base)
 
     def update_regime(self):
         """
@@ -161,14 +325,45 @@ class RiskEngine:
         engine = signal.get('engine', 'standard')
         risk_pct = self.get_risk_per_trade(engine)
 
-        position_size = helpers.calculate_position_size_from_risk(
+        base_size = helpers.calculate_position_size_from_risk(
             self.current_equity,
             risk_pct,
             entry_price,
             stop_loss_price
         )
 
-        return position_size
+        # === UPGRADE D: Liquidity-Aware Position Sizing ===
+        if self.config.liquidity_sizing_enabled:
+            try:
+                symbol = signal.get('symbol')
+                liquidity = self.exchange.get_liquidity_metrics(symbol)
+
+                spread_pct = liquidity.get('spread_pct', 0.5)
+                depth_usd = liquidity.get('depth_usd', 10000)
+
+                # Calculate liquidity factors
+                spread_factor = max(0.0, min(1.0, 1.0 - (spread_pct / self.config.liquidity_spread_soft_limit)))
+                depth_factor = max(0.0, min(1.0, depth_usd / self.config.liquidity_depth_good_level))
+
+                # Combined liquidity factor (take minimum of both)
+                liquidity_factor = max(self.config.liquidity_min_factor, min(spread_factor, depth_factor))
+
+                # Apply scaling
+                final_size = base_size * liquidity_factor
+
+                self.logger.debug(
+                    f"[LiquiditySizing] {symbol} base=${base_size:.2f}, "
+                    f"spread={spread_pct:.2f}%, depth=${depth_usd:.0f}, "
+                    f"factor={liquidity_factor:.2f}, final=${final_size:.2f}"
+                )
+
+                return final_size
+
+            except Exception as e:
+                self.logger.error(f"[LiquiditySizing] Error: {e}, using base size")
+                return base_size
+
+        return base_size
 
     def can_open_new_position(self, signal: Dict) -> tuple[bool, Optional[str]]:
         """
@@ -189,6 +384,25 @@ class RiskEngine:
                     )
                     self.daily_loss_alert_sent = True
                 return False, f"Daily loss limit hit ({daily_loss_pct*100:.2f}%)"
+
+        # === UPGRADE E: Correlation-Aware Portfolio Heat ===
+        # Check correlation bucket limits
+        if self.config.correlation_limit_enabled:
+            symbol = signal.get('symbol')
+            bucket = self.get_symbol_bucket(symbol)
+
+            # Count positions in this bucket
+            bucket_count = sum(
+                1 for p in self.open_positions
+                if self.get_symbol_bucket(p.get('symbol', '')) == bucket
+            )
+
+            if bucket_count >= self.config.max_correlated_positions:
+                self.logger.debug(
+                    f"[CorrelationGuard] Rejected {symbol}: bucket '{bucket}' "
+                    f"already has {bucket_count} positions (max {self.config.max_correlated_positions})"
+                )
+                return False, f"Bucket {bucket} limit reached ({bucket_count}/{self.config.max_correlated_positions})"
 
         # Check max concurrent positions
         if len(self.open_positions) >= self.config.max_concurrent_positions:

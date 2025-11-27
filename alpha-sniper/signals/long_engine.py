@@ -109,6 +109,50 @@ class LongEngine:
         elif momentum_1h > 5:
             score += 5
 
+        # === UPGRADE A: Sideways Coiled Volatility Boost ===
+        if self.config.sideways_coil_enabled and regime == "SIDEWAYS":
+            # Calculate ATR expansion
+            atr_current = helpers.calculate_atr(df_15m, 14).iloc[-1]
+
+            # Get 24h of 15m candles = 96 candles
+            lookback_24h = min(96, len(df_15m) - 1)
+            if lookback_24h >= 20:  # Need enough data
+                atr_series = helpers.calculate_atr(df_15m, 14)
+                atr_median_24h = atr_series.iloc[-lookback_24h:].median()
+
+                atr_expansion = atr_current >= (self.config.sideways_coil_atr_mult * atr_median_24h)
+
+                # Simple RSI divergence check
+                rsi_divergence = False
+                if self.config.sideways_rsi_divergence_enabled:
+                    rsi_series = helpers.calculate_rsi(df_15m, 'close', 14)
+
+                    # Look back 10-20 bars for divergence
+                    lookback_bars = min(20, len(df_15m) - 1)
+                    if lookback_bars >= 10:
+                        recent_prices = df_15m['close'].iloc[-lookback_bars:]
+                        recent_rsi = rsi_series.iloc[-lookback_bars:]
+
+                        # Check if price made new/equal high but RSI didn't
+                        price_high = recent_prices.max()
+                        price_current = recent_prices.iloc[-1]
+                        rsi_high = recent_rsi.max()
+                        rsi_current = recent_rsi.iloc[-1]
+
+                        # Price near recent high but RSI is lower
+                        if price_current >= price_high * 0.995:  # Within 0.5% of high
+                            if rsi_current < rsi_high * 0.95:  # RSI at least 5% below high
+                                rsi_divergence = True
+
+                # Apply boost if conditions met
+                if atr_expansion and rsi_divergence:
+                    score += self.config.sideways_coil_score_boost
+                    self.logger.debug(
+                        f"[SidewaysCoil] {symbol} +{self.config.sideways_coil_score_boost} boost | "
+                        f"ATR: {atr_current:.4f} vs median {atr_median_24h:.4f} | "
+                        f"RSI divergence detected"
+                    )
+
         # Check if meets minimum score
         if score < self.config.min_score:
             return None

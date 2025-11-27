@@ -30,6 +30,38 @@ class Config:
         self.min_24h_quote_volume = float(os.getenv("MIN_24H_QUOTE_VOLUME", 50000))
         self.max_funding_8h_short = float(os.getenv("MAX_FUNDING_8H_SHORT", 0.00035))
 
+        # === V4.2 ADDITIVE OVERLAYS ===
+
+        # UPGRADE A: Sideways Coiled Volatility Boost
+        self.sideways_coil_enabled = self.parse_bool(os.getenv("SIDEWAYS_COIL_ENABLED", "true"))
+        self.sideways_coil_atr_mult = float(os.getenv("SIDEWAYS_COIL_ATR_MULT", 1.5))
+        self.sideways_rsi_divergence_enabled = self.parse_bool(os.getenv("SIDEWAYS_RSI_DIVERGENCE_ENABLED", "true"))
+        self.sideways_coil_score_boost = int(os.getenv("SIDEWAYS_COIL_SCORE_BOOST", 10))
+
+        # UPGRADE B: Short Funding Overlay
+        self.short_funding_overlay_enabled = self.parse_bool(os.getenv("SHORT_FUNDING_OVERLAY_ENABLED", "true"))
+        self.short_min_funding_8h = float(os.getenv("SHORT_MIN_FUNDING_8H", 0.00025))
+
+        # UPGRADE C: Pump Engine Allocation Feedback Loop
+        self.pump_feedback_enabled = self.parse_bool(os.getenv("PUMP_FEEDBACK_ENABLED", "true"))
+        self.pump_feedback_lookback = int(os.getenv("PUMP_FEEDBACK_LOOKBACK", 20))
+        self.pump_feedback_low_r_thres = float(os.getenv("PUMP_FEEDBACK_LOW_R_THRES", 0.5))
+        self.pump_feedback_high_r_thres = float(os.getenv("PUMP_FEEDBACK_HIGH_R_THRES", 1.0))
+        self.pump_allocation_min_base = float(os.getenv("PUMP_ALLOCATION_MIN_BASE", 0.20))
+        self.pump_allocation_max_base = float(os.getenv("PUMP_ALLOCATION_MAX_BASE", 0.35))
+        self.pump_allocation_min_floor = float(os.getenv("PUMP_ALLOCATION_MIN_FLOOR", 0.15))
+        self.pump_allocation_max_ceil = float(os.getenv("PUMP_ALLOCATION_MAX_CEIL", 0.40))
+
+        # UPGRADE D: Liquidity-Aware Position Sizing
+        self.liquidity_sizing_enabled = self.parse_bool(os.getenv("LIQUIDITY_SIZING_ENABLED", "true"))
+        self.liquidity_spread_soft_limit = float(os.getenv("LIQUIDITY_SPREAD_SOFT_LIMIT", 0.7))
+        self.liquidity_depth_good_level = float(os.getenv("LIQUIDITY_DEPTH_GOOD_LEVEL", 20000))
+        self.liquidity_min_factor = float(os.getenv("LIQUIDITY_MIN_FACTOR", 0.25))
+
+        # UPGRADE E: Correlation-Aware Portfolio Heat
+        self.correlation_limit_enabled = self.parse_bool(os.getenv("CORRELATION_LIMIT_ENABLED", "true"))
+        self.max_correlated_positions = int(os.getenv("MAX_CORRELATED_POSITIONS", 2))
+
         if not self.sim_mode:
             if not self.mexc_api_key or not self.mexc_secret_key:
                 raise Exception("Live mode requires MEXC_API_KEY and MEXC_SECRET_KEY in the environment")

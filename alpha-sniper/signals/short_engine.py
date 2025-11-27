@@ -58,6 +58,16 @@ class ShortEngine:
         if funding_rate > self.config.max_funding_8h_short:
             return None
 
+        # === UPGRADE B: Short Funding Overlay ===
+        # Only short when funding is positive enough (we get paid to short)
+        if self.config.short_funding_overlay_enabled:
+            if funding_rate < self.config.short_min_funding_8h:
+                self.logger.debug(
+                    f"[ShortFunding] Rejected {symbol}: "
+                    f"funding {funding_rate:.5f} < min {self.config.short_min_funding_8h:.5f}"
+                )
+                return None
+
         # Current price
         current_price = df_15m['close'].iloc[-1]
 
