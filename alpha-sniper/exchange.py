@@ -69,7 +69,7 @@ class SimulatedExchange:
             return self._generate_alt_klines(symbol, timeframe, limit)
 
     def _generate_btc_klines(self, timeframe: str, limit: int):
-        """Generate BTC fake data with uptrend"""
+        """Generate BTC fake data with gradual uptrend and market cycles"""
         now = int(datetime.now().timestamp() * 1000)
 
         # Timeframe to milliseconds
@@ -77,29 +77,38 @@ class SimulatedExchange:
         tf_ms = tf_map.get(timeframe, 3600000)
 
         ohlcv = []
-        base_price = self.base_price_btc
+        current_price = self.base_price_btc
 
         # Generate older candles first
         for i in range(limit, 0, -1):
             ts = now - (i * tf_ms)
 
-            # Slight uptrend + noise
-            trend = (limit - i) * 10  # $10 per candle uptrend
-            noise = random.uniform(-200, 200)
-            price = base_price + trend + noise
+            # Gradual uptrend: +0.05% per candle on average
+            trend_move = current_price * 0.0005
 
-            o = price
-            h = price * random.uniform(1.001, 1.01)
-            l = price * random.uniform(0.99, 0.999)
-            c = price * random.uniform(0.995, 1.005)
-            v = random.uniform(1000, 5000)
+            # Add market cycles (trending, consolidation, pullback)
+            cycle_position = i % 50  # 50-candle cycles
+            if cycle_position < 20:  # Trending phase
+                noise = random.uniform(-50, 150)  # Upward bias
+            elif cycle_position < 35:  # Consolidation phase
+                noise = random.uniform(-100, 100)  # Sideways
+            else:  # Pullback phase
+                noise = random.uniform(-150, 50)  # Downward bias
+
+            current_price = current_price + trend_move + noise
+
+            o = current_price
+            h = current_price * random.uniform(1.002, 1.015)
+            l = current_price * random.uniform(0.985, 0.998)
+            c = current_price * random.uniform(0.995, 1.005)
+            v = random.uniform(2000, 8000)
 
             ohlcv.append([ts, o, h, l, c, v])
 
         return ohlcv
 
     def _generate_alt_klines(self, symbol: str, timeframe: str, limit: int):
-        """Generate altcoin fake data"""
+        """Generate altcoin fake data with occasional trends and volume spikes"""
         now = int(datetime.now().timestamp() * 1000)
 
         tf_map = {'1d': 86400000, '1h': 3600000, '15m': 900000}
@@ -108,18 +117,48 @@ class SimulatedExchange:
         # Base price varies by coin
         base = random.uniform(10, 100)
 
+        # Hash symbol to get consistent behavior per coin
+        symbol_hash = hash(symbol) % 100
+
+        # Determine if this coin is in an uptrend, downtrend, or sideways
+        if symbol_hash < 30:  # 30% trending up
+            trend = 0.008  # +0.8% per candle - STRONG uptrend
+            vol_multiplier = 2.5  # Higher base volume
+        elif symbol_hash < 50:  # 20% trending down
+            trend = -0.006
+            vol_multiplier = 1.5
+        else:  # 50% sideways
+            trend = 0
+            vol_multiplier = 1.0
+
         ohlcv = []
+        current_price = base
+
         for i in range(limit, 0, -1):
             ts = now - (i * tf_ms)
 
-            noise = random.uniform(0.95, 1.05)
-            price = base * noise
+            # Apply accelerating trend (stronger in recent candles)
+            trend_strength = 1.0 + (0.5 * (limit - i) / limit)  # 1.0 to 1.5x
+            current_price = current_price * (1 + (trend * trend_strength))
+
+            # Less noise for cleaner trends
+            noise = random.uniform(0.99, 1.01)
+            price = current_price * noise
 
             o = price
-            h = price * random.uniform(1.001, 1.02)
-            l = price * random.uniform(0.98, 0.999)
-            c = price * random.uniform(0.99, 1.01)
-            v = random.uniform(100, 1000)
+            h = price * random.uniform(1.005, 1.02)
+            l = price * random.uniform(0.98, 0.995)
+            c = price * random.uniform(0.995, 1.005)
+
+            # Volume increases with trend - recent candles have MUCH higher volume
+            recency_factor = 1.0 + (2.0 * (limit - i) / limit)  # 1.0x to 3.0x
+            base_vol = random.uniform(300, 600) * vol_multiplier * recency_factor
+
+            # Frequent volume spikes in recent candles
+            if i <= 10 or random.random() < 0.25:  # Last 10 candles OR 25% chance
+                v = base_vol * random.uniform(1.8, 3.5)  # Big spike
+            else:
+                v = base_vol
 
             ohlcv.append([ts, o, h, l, c, v])
 

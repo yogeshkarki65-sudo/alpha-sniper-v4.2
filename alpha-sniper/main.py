@@ -228,8 +228,10 @@ class AlphaSniperBot:
                 # Calculate position size
                 size_usd = self.risk_engine.calculate_position_size(signal, entry_price, stop_loss)
 
-                if size_usd < 10:  # Minimum position size
-                    self.logger.debug(f"❌ Position size too small for {signal['symbol']}: ${size_usd:.2f}")
+                # Minimum position size (adjusted for account size)
+                min_position_size = max(1.0, self.config.starting_equity * 0.01)  # 1% of equity or $1, whichever is higher
+                if size_usd < min_position_size:
+                    self.logger.debug(f"❌ Position size too small for {signal['symbol']}: ${size_usd:.2f} (min: ${min_position_size:.2f})")
                     continue
 
                 # Calculate risk %
