@@ -121,6 +121,21 @@ class AlphaSniperBot:
             self.logger.error(f"🔴 Error in trading cycle: {e}")
             self.logger.exception(e)
 
+            # Send critical error alert to Telegram
+            try:
+                mode = "SIM" if self.config.sim_mode else "LIVE"
+                error_type = type(e).__name__
+                error_msg = str(e)[:200]  # Limit to 200 chars
+                self.telegram.send(
+                    f"🚨 CRITICAL ERROR\n"
+                    f"Mode: {mode}\n"
+                    f"Type: {error_type}\n"
+                    f"Message: {error_msg}\n"
+                    f"Bot will attempt to continue..."
+                )
+            except:
+                pass  # Don't crash on Telegram failure
+
     def _manage_positions(self):
         """
         Manage open positions: check SL/TP, max hold time, partial TPs
@@ -291,6 +306,24 @@ class AlphaSniperBot:
                     self.risk_engine.add_position(position)
                     signals_opened += 1
 
+                    # Send Telegram notification for SIM open
+                    try:
+                        telegram_msg = (
+                            f"🟢 Trade opened\n"
+                            f"Mode: SIM\n"
+                            f"Symbol: {position['symbol']}\n"
+                            f"Side: {position['side']}\n"
+                            f"Engine: {position['engine']}\n"
+                            f"Regime: {position['regime']}\n"
+                            f"Entry: ${entry_price:.6f}\n"
+                            f"Stop: ${stop_loss:.6f}\n"
+                            f"Size: ${size_usd:.2f} ({risk_pct*100:.3f}% risk)\n"
+                            f"Equity: ${equity_at_entry:.2f}"
+                        )
+                        self.telegram.send(telegram_msg)
+                    except Exception as e:
+                        self.logger.warning(f"Failed to send Telegram notification: {e}")
+
                 else:
                     # LIVE order
                     # Calculate amount in base currency
@@ -316,14 +349,23 @@ class AlphaSniperBot:
                         self.risk_engine.add_position(position)
                         signals_opened += 1
 
-                        # Send Telegram alert
-                        self.telegram.send(
-                            f"✅ Trade opened\n"
-                            f"{position['symbol']} {position['side']}\n"
-                            f"Size: ${size_usd:.2f}\n"
-                            f"Entry: ${entry_price:.6f}\n"
-                            f"Engine: {position['engine']}"
-                        )
+                        # Send Telegram notification for LIVE open
+                        try:
+                            telegram_msg = (
+                                f"🟢 Trade opened\n"
+                                f"Mode: LIVE\n"
+                                f"Symbol: {position['symbol']}\n"
+                                f"Side: {position['side']}\n"
+                                f"Engine: {position['engine']}\n"
+                                f"Regime: {position['regime']}\n"
+                                f"Entry: ${entry_price:.6f}\n"
+                                f"Stop: ${stop_loss:.6f}\n"
+                                f"Size: ${size_usd:.2f} ({risk_pct*100:.3f}% risk)\n"
+                                f"Equity: ${equity_at_entry:.2f}"
+                            )
+                            self.telegram.send(telegram_msg)
+                        except Exception as e:
+                            self.logger.warning(f"Failed to send Telegram notification: {e}")
                     else:
                         self.logger.error(f"🔴 Failed to create order for {position['symbol']}")
 
@@ -377,6 +419,22 @@ class AlphaSniperBot:
         except Exception as e:
             self.logger.error(f"🔴 Fatal error in main loop: {e}")
             self.logger.exception(e)
+
+            # Send fatal error alert to Telegram
+            try:
+                mode = "SIM" if self.config.sim_mode else "LIVE"
+                error_type = type(e).__name__
+                error_msg = str(e)[:200]  # Limit to 200 chars
+                self.telegram.send(
+                    f"🚨 FATAL ERROR - BOT STOPPING\n"
+                    f"Mode: {mode}\n"
+                    f"Type: {error_type}\n"
+                    f"Message: {error_msg}\n"
+                    f"Bot is shutting down..."
+                )
+            except:
+                pass  # Don't crash on Telegram failure
+
             self.shutdown()
 
     def shutdown(self):
