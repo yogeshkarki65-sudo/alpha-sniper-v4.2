@@ -202,6 +202,9 @@ class Scanner:
                 df_15m = helpers.ohlcv_to_dataframe(ohlcv_15m)
                 df_1h = helpers.ohlcv_to_dataframe(ohlcv_1h)
 
+                # Fetch real funding rate (for short engine)
+                funding_rate = self.exchange.get_funding_rate(symbol)
+
                 # Store data
                 market_data[symbol] = {
                     'ticker': ticker,
@@ -209,7 +212,7 @@ class Scanner:
                     'df_1h': df_1h,
                     'spread_pct': spread_pct,
                     'volume_24h': volume_24h,
-                    'funding_rate': 0,  # TODO: Fetch real funding if available
+                    'funding_rate': funding_rate,
                     'btc_performance': 0  # TODO: Calculate relative to BTC
                 }
 
