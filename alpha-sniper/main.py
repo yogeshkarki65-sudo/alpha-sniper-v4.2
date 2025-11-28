@@ -60,12 +60,21 @@ class AlphaSniperBot:
         self.risk_engine = RiskEngine(self.config, self.exchange, self.logger, self.telegram)
         self.scanner = Scanner(self.exchange, self.risk_engine, self.config, self.logger)
 
+        # Rate limiting for error notifications (15 min cooldown)
+        self.last_error_notification = 0
+        self.error_notification_cooldown = 900  # 15 minutes in seconds
+
         # Send startup notification
+        sim_data_source = getattr(self.config, 'sim_data_source', 'FAKE')
+        regime = self.risk_engine.current_regime if self.risk_engine.current_regime else 'UNKNOWN'
         startup_msg = (
             f"🚀 Alpha Sniper V4.2 started\n"
             f"Mode: {'SIM' if self.config.sim_mode else 'LIVE'}\n"
-            f"Starting Equity: ${self.config.starting_equity:.2f}"
+            f"Data: {sim_data_source if self.config.sim_mode else 'LIVE'}\n"
+            f"Starting Equity: ${self.config.starting_equity:.2f}\n"
+            f"Regime: {regime}"
         )
+        self.logger.info(f"[TELEGRAM] Sending startup notification")
         self.telegram.send(startup_msg)
 
         # Load existing positions
@@ -121,18 +130,22 @@ class AlphaSniperBot:
             self.logger.error(f"🔴 Error in trading cycle: {e}")
             self.logger.exception(e)
 
-            # Send critical error alert to Telegram
+            # Send critical error alert to Telegram (rate limited to once per 15 min)
             try:
-                mode = "SIM" if self.config.sim_mode else "LIVE"
-                error_type = type(e).__name__
-                error_msg = str(e)[:200]  # Limit to 200 chars
-                self.telegram.send(
-                    f"🚨 CRITICAL ERROR\n"
-                    f"Mode: {mode}\n"
-                    f"Type: {error_type}\n"
-                    f"Message: {error_msg}\n"
-                    f"Bot will attempt to continue..."
-                )
+                current_time = time.time()
+                if current_time - self.last_error_notification >= self.error_notification_cooldown:
+                    mode = "SIM" if self.config.sim_mode else "LIVE"
+                    error_type = type(e).__name__
+                    error_msg = str(e)[:200]  # Limit to 200 chars
+                    self.logger.info(f"[TELEGRAM] Sending critical error notification")
+                    self.telegram.send(
+                        f"🚨 CRITICAL ERROR\n"
+                        f"Mode: {mode}\n"
+                        f"Type: {error_type}\n"
+                        f"Message: {error_msg}\n"
+                        f"Bot will attempt to continue..."
+                    )
+                    self.last_error_notification = current_time
             except:
                 pass  # Don't crash on Telegram failure
 
@@ -309,20 +322,18 @@ class AlphaSniperBot:
                     # Send Telegram notification for SIM open
                     try:
                         telegram_msg = (
-                            f"🟢 Trade opened\n"
-                            f"Mode: SIM\n"
-                            f"Symbol: {position['symbol']}\n"
-                            f"Side: {position['side']}\n"
-                            f"Engine: {position['engine']}\n"
+                            f"✅ TRADE OPENED\n"
+                            f"Symbol: {position['symbol']} ({position['side']}, engine={position['engine']})\n"
                             f"Regime: {position['regime']}\n"
-                            f"Entry: ${entry_price:.6f}\n"
-                            f"Stop: ${stop_loss:.6f}\n"
-                            f"Size: ${size_usd:.2f} ({risk_pct*100:.3f}% risk)\n"
-                            f"Equity: ${equity_at_entry:.2f}"
+                            f"Size: ${size_usd:.2f}\n"
+                            f"Entry: {entry_price:.4f}\n"
+                            f"SL: {stop_loss:.4f}\n"
+                            f"Risk: {risk_pct*100:.2f}% (R=1.0)"
                         )
+                        self.logger.info(f"[TELEGRAM] Sending trade open notification for {position['symbol']}")
                         self.telegram.send(telegram_msg)
                     except Exception as e:
-                        self.logger.warning(f"Failed to send Telegram notification: {e}")
+                        self.logger.warning(f"[TELEGRAM] Failed to send trade open notification: {e}")
 
                 else:
                     # LIVE order
@@ -352,20 +363,18 @@ class AlphaSniperBot:
                         # Send Telegram notification for LIVE open
                         try:
                             telegram_msg = (
-                                f"🟢 Trade opened\n"
-                                f"Mode: LIVE\n"
-                                f"Symbol: {position['symbol']}\n"
-                                f"Side: {position['side']}\n"
-                                f"Engine: {position['engine']}\n"
+                                f"✅ TRADE OPENED [LIVE]\n"
+                                f"Symbol: {position['symbol']} ({position['side']}, engine={position['engine']})\n"
                                 f"Regime: {position['regime']}\n"
-                                f"Entry: ${entry_price:.6f}\n"
-                                f"Stop: ${stop_loss:.6f}\n"
-                                f"Size: ${size_usd:.2f} ({risk_pct*100:.3f}% risk)\n"
-                                f"Equity: ${equity_at_entry:.2f}"
+                                f"Size: ${size_usd:.2f}\n"
+                                f"Entry: {entry_price:.4f}\n"
+                                f"SL: {stop_loss:.4f}\n"
+                                f"Risk: {risk_pct*100:.2f}% (R=1.0)"
                             )
+                            self.logger.info(f"[TELEGRAM] Sending LIVE trade open notification for {position['symbol']}")
                             self.telegram.send(telegram_msg)
                         except Exception as e:
-                            self.logger.warning(f"Failed to send Telegram notification: {e}")
+                            self.logger.warning(f"[TELEGRAM] Failed to send LIVE trade open notification: {e}")
                     else:
                         self.logger.error(f"🔴 Failed to create order for {position['symbol']}")
 
@@ -425,6 +434,7 @@ class AlphaSniperBot:
                 mode = "SIM" if self.config.sim_mode else "LIVE"
                 error_type = type(e).__name__
                 error_msg = str(e)[:200]  # Limit to 200 chars
+                self.logger.info(f"[TELEGRAM] Sending fatal error notification")
                 self.telegram.send(
                     f"🚨 FATAL ERROR - BOT STOPPING\n"
                     f"Mode: {mode}\n"

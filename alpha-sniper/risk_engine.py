@@ -269,16 +269,17 @@ class RiskEngine:
 
             # Check if regime changed
             if regime != self.current_regime:
-                self.logger.info(f"📊 Regime changed: {self.current_regime} → {regime}")
+                old_regime = self.current_regime if self.current_regime else "UNKNOWN"
+                self.logger.info(f"📊 Regime changed: {old_regime} → {regime}")
 
-                # Enhanced Telegram alert with details
+                # Send focused Telegram notification for regime change
                 alert_msg = (
-                    f"📈 Regime changed: {self.current_regime} → {regime}\n"
+                    f"📊 REGIME CHANGE: {old_regime} → {regime}\n"
                     f"Price: ${current_price:.2f}\n"
-                    f"EMA200: ${ema200:.2f}\n"
                     f"RSI: {rsi:.1f}\n"
                     f"30d Return: {return_30d:+.1f}%"
                 )
+                self.logger.info(f"[TELEGRAM] Sending regime change notification")
                 self.telegram.send(alert_msg)
                 self.current_regime = regime
             else:
@@ -386,6 +387,7 @@ class RiskEngine:
                 # Send alert first time it's hit
                 if not self.daily_loss_alert_sent:
                     mode = "SIM" if self.config.sim_mode else "LIVE"
+                    self.logger.info(f"[TELEGRAM] Sending daily loss limit notification")
                     self.telegram.send(
                         f"⛔ DAILY LOSS LIMIT HIT\n"
                         f"Mode: {mode}\n"
@@ -516,23 +518,18 @@ class RiskEngine:
 
         # Send Telegram notification for ALL trade closes
         try:
-            mode = "SIM" if self.config.sim_mode else "LIVE"
             telegram_msg = (
-                f"🔴 Trade closed\n"
-                f"Mode: {mode}\n"
-                f"Symbol: {position['symbol']}\n"
-                f"Side: {position['side']}\n"
-                f"Engine: {position.get('engine', 'unknown')}\n"
-                f"Regime at exit: {position.get('regime', 'unknown')}\n"
-                f"PnL: ${pnl_usd:.2f} ({pnl_pct:.2f}%)\n"
-                f"R-multiple: {r_multiple:.2f}R\n"
-                f"Hold time: {hold_time_hours:.1f}h\n"
-                f"Reason: {reason}\n"
-                f"New equity: ${self.current_equity:.2f}"
+                f"🔴 TRADE CLOSED\n"
+                f"Symbol: {position['symbol']} {position['side']}\n"
+                f"PnL: ${pnl_usd:.2f} ({pnl_pct:.1f}%)\n"
+                f"R: {r_multiple:.2f}R\n"
+                f"Hold: {hold_time_hours:.1f}h\n"
+                f"Reason: {reason}"
             )
+            self.logger.info(f"[TELEGRAM] Sending trade close notification for {position['symbol']}")
             self.telegram.send(telegram_msg)
         except Exception as e:
-            self.logger.warning(f"Failed to send Telegram notification: {e}")
+            self.logger.warning(f"[TELEGRAM] Failed to send trade close notification: {e}")
 
         # Track closed trade
         closed_trade = {
