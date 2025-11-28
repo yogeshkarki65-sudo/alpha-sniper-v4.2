@@ -542,18 +542,51 @@ class DataOnlyMexcExchange:
         """Fetch orderbook from MEXC (public endpoint)"""
         return self._with_retries(lambda: self.client.fetch_order_book(symbol), f"fetch_orderbook {symbol}")
 
-    def get_funding_rate(self, symbol: str):
-        """Fetch funding rate from MEXC (public endpoint)"""
+    def get_funding_rate(self, symbol: str) -> float:
+        """
+        Fetch real MEXC futures funding rate (8h) for a given symbol.
+
+        Uses MEXC Contract API: https://contract.mexc.com/api/v1/contract/funding_rate/{symbol}
+        API Documentation: https://mxcdevelop.github.io/apidocs/contract_v1_en/#get-contract-funding-rate
+
+        Args:
+            symbol: Spot symbol like "BTC/USDT"
+
+        Returns:
+            float: 8h funding rate (e.g., 0.0001 = 0.01%), or 0.0 on failure
+
+        Example:
+            >>> ex.get_funding_rate("BTC/USDT")
+            0.000100  # 0.01% funding rate
+        """
         try:
-            funding = self._with_retries(
-                lambda: self.client.fetch_funding_rate(symbol),
-                f"fetch_funding_rate {symbol}"
-            )
-            if funding:
-                return funding.get('fundingRate', 0)
-        except:
-            pass
-        return 0
+            # Convert spot symbol to MEXC contract format
+            # "BTC/USDT" -> "BTC_USDT" for MEXC contract API
+            contract_symbol = symbol.replace('/', '_')
+
+            # Use MEXC contract API directly (more reliable than CCXT for funding)
+            import requests
+
+            url = "https://contract.mexc.com/api/v1/contract/funding_rate/" + contract_symbol
+            response = requests.get(url, timeout=5)
+
+            if response.status_code == 200:
+                data = response.json()
+                if data and 'data' in data and data['data']:
+                    # MEXC returns funding rate as a decimal
+                    rate = float(data['data'].get('fundingRate', 0))
+                    self.logger.debug(f"[Funding] {symbol} | funding_8h={rate:.6f}")
+                    return rate
+                else:
+                    self.logger.debug(f"[Funding] No funding data for {symbol}, defaulting to 0.0")
+                    return 0.0
+            else:
+                self.logger.debug(f"[Funding] API returned {response.status_code} for {symbol}, defaulting to 0.0")
+                return 0.0
+
+        except Exception as e:
+            self.logger.debug(f"[Funding] Failed to fetch funding for {symbol}, defaulting to 0.0: {e}")
+            return 0.0
 
     def get_liquidity_metrics(self, symbol: str):
         """
