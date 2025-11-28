@@ -35,3 +35,4 @@ Thumbs.db
 build/
 dist/
 *.egg-info/
+signals/__pycache__/
