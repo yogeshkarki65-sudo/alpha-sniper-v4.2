@@ -518,15 +518,21 @@ class RiskEngine:
 
         # Send Telegram notification for ALL trade closes
         try:
+            mode = "SIM" if self.config.sim_mode else "LIVE"
             telegram_msg = (
-                f"🔴 TRADE CLOSED\n"
-                f"Symbol: {position['symbol']} {position['side']}\n"
+                f"🔴 [{mode}] TRADE CLOSED\n"
+                f"Symbol: {position['symbol']}\n"
+                f"Side: {position['side']}\n"
+                f"Engine: {position.get('engine', 'unknown')}\n"
+                f"Regime: {position.get('regime', 'unknown')}\n"
+                f"Entry: {entry_price:.6f}\n"
+                f"Exit: {exit_price:.6f}\n"
                 f"PnL: ${pnl_usd:.2f} ({pnl_pct:.1f}%)\n"
-                f"R: {r_multiple:.2f}R\n"
-                f"Hold: {hold_time_hours:.1f}h\n"
+                f"R-multiple: {r_multiple:.2f}R\n"
+                f"Hold time: {hold_time_hours:.1f}h\n"
                 f"Reason: {reason}"
             )
-            self.logger.info(f"[TELEGRAM] Sending trade close notification for {position['symbol']}")
+            self.logger.info(f"[TELEGRAM] Sending {mode} trade close notification for {position['symbol']}")
             self.telegram.send(telegram_msg)
         except Exception as e:
             self.logger.warning(f"[TELEGRAM] Failed to send trade close notification: {e}")
@@ -560,18 +566,35 @@ class RiskEngine:
         """
         current_time = time.time()
         if current_time >= self.daily_reset_time:
+            mode = "SIM" if self.config.sim_mode else "LIVE"
             self.logger.info(f"🌅 Daily reset | PnL today: ${self.daily_pnl:.2f}")
 
             # Send daily summary
             if self.closed_trades_today:
                 wins = sum(1 for t in self.closed_trades_today if t['pnl_usd'] > 0)
                 losses = sum(1 for t in self.closed_trades_today if t['pnl_usd'] <= 0)
-                self.telegram.send(
-                    f"📊 Daily Summary\n"
-                    f"PnL: ${self.daily_pnl:.2f}\n"
-                    f"Trades: {len(self.closed_trades_today)} (W:{wins} L:{losses})\n"
-                    f"Equity: ${self.current_equity:.2f}"
-                )
+                try:
+                    self.telegram.send(
+                        f"📊 [{mode}] Daily Summary\n"
+                        f"PnL: ${self.daily_pnl:.2f}\n"
+                        f"Trades: {len(self.closed_trades_today)} (W:{wins} L:{losses})\n"
+                        f"Equity: ${self.current_equity:.2f}"
+                    )
+                except Exception as e:
+                    self.logger.warning(f"[TELEGRAM] Failed to send daily summary: {e}")
+
+            # Send daily reset notification (especially important if daily loss limit was hit)
+            if self.daily_loss_alert_sent:
+                try:
+                    self.telegram.send(
+                        f"🌅 [{mode}] DAILY RESET\n"
+                        f"Daily loss counter has been reset.\n"
+                        f"New entries are now allowed.\n"
+                        f"Current equity: ${self.current_equity:.2f}"
+                    )
+                    self.logger.info(f"[TELEGRAM] Sent daily reset notification")
+                except Exception as e:
+                    self.logger.warning(f"[TELEGRAM] Failed to send daily reset notification: {e}")
 
             # Reset
             self.daily_pnl = 0.0
