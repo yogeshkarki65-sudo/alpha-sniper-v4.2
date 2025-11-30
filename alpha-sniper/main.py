@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 
 from config import get_config
 from utils import setup_logger
+from utils.dynamic_filters import update_dynamic_filters
 from utils.telegram import TelegramNotifier
 from utils import helpers
 from exchange import create_exchange
@@ -407,6 +408,17 @@ class AlphaSniperBot:
         heat = self.risk_engine._calculate_current_heat()
         self.logger.info(f"   Portfolio Heat: {heat*100:.2f}% / {self.config.max_portfolio_heat*100:.2f}%")
 
+    def run_dfe(self):
+        """
+        Run Dynamic Filter Engine daily adjustment at 00:05 UTC
+        """
+        if self.config.dfe_enabled:
+            try:
+                update_dynamic_filters(self.config, self.logger)
+            except Exception as e:
+                self.logger.error(f"DFE | Error running dynamic filter adjustment: {e}")
+                self.logger.exception(e)
+
     def run(self):
         """
         Main run loop with scheduling
@@ -420,6 +432,13 @@ class AlphaSniperBot:
             self.logger.info(f"⏰ Scheduling scans every {interval_sec} seconds")
 
             schedule.every(interval_sec).seconds.do(self.trading_cycle)
+
+            # Schedule Dynamic Filter Engine at 00:05 UTC daily
+            if self.config.dfe_enabled:
+                schedule.every().day.at("00:05").do(self.run_dfe)
+                self.logger.info("🔧 DFE enabled - scheduled daily at 00:05 UTC")
+            else:
+                self.logger.info("🔧 DFE disabled - filters will not auto-adjust")
 
             # Main loop
             while self.running:

@@ -63,6 +63,12 @@ class Config:
         self.correlation_limit_enabled = self.parse_bool(os.getenv("CORRELATION_LIMIT_ENABLED", "true"))
         self.max_correlated_positions = int(os.getenv("MAX_CORRELATED_POSITIONS", 2))
 
+        # Dynamic Filter Engine (DFE)
+        self.dfe_enabled = self.parse_bool(os.getenv("DFE_ENABLED", "false"))
+
+        # Pump engine age limit (managed by DFE if enabled)
+        self.pump_max_age_hours = int(os.getenv("PUMP_MAX_AGE_HOURS", 72))
+
         if not self.sim_mode:
             if not self.mexc_api_key or not self.mexc_secret_key:
                 raise Exception("Live mode requires MEXC_API_KEY and MEXC_SECRET_KEY in the environment")
