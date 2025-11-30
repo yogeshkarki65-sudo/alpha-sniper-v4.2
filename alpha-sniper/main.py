@@ -8,12 +8,14 @@ Features:
 - Multiple signal engines (long, short, pump, bear_micro)
 - Safe risk management
 - Telegram alerts
+- Fast Stop Manager (dual async loops)
 """
 import time
 import schedule
 import signal
 import sys
 import argparse
+import asyncio
 from datetime import datetime, timezone
 
 from config import get_config
@@ -53,6 +55,15 @@ class AlphaSniperBot:
         self.logger.info(f"   Pump Allocation Feedback: {'ENABLED' if self.config.pump_feedback_enabled else 'DISABLED'}")
         self.logger.info(f"   Liquidity-Aware Sizing: {'ENABLED' if self.config.liquidity_sizing_enabled else 'DISABLED'}")
         self.logger.info(f"   Correlation Guard: {'ENABLED' if self.config.correlation_limit_enabled else 'DISABLED'}")
+        self.logger.info("")
+
+        # Log Fast Stop Manager Status
+        self.logger.info("⚡ Fast Stop Manager:")
+        self.logger.info(f"   SCAN interval: {self.config.scan_interval_seconds}s")
+        self.logger.info(f"   Position check interval: {self.config.position_check_interval_seconds}s (Fast Stop Manager enabled)")
+        self.logger.info(f"   Min stop distance - Core: {self.config.min_stop_pct_core*100:.1f}%")
+        self.logger.info(f"   Min stop distance - Bear Micro: {self.config.min_stop_pct_bear_micro*100:.1f}%")
+        self.logger.info(f"   Min stop distance - Pump: {self.config.min_stop_pct_pump*100:.1f}%")
         self.logger.info("")
 
         # Initialize components
@@ -243,6 +254,92 @@ class AlphaSniperBot:
         for position, exit_price, reason in positions_to_close:
             self.risk_engine.close_position(position, exit_price, reason)
 
+    def _check_fast_stops(self):
+        """
+        Fast Stop Manager - lightweight check for SL/TP hits only
+        Runs every POSITION_CHECK_INTERVAL_SECONDS (e.g. 15s)
+        Does NOT scan for new signals or update regime
+        """
+        if not self.risk_engine.open_positions:
+            return  # No positions to check
+
+        positions_to_close = []
+
+        for position in self.risk_engine.open_positions:
+            try:
+                symbol = position['symbol']
+                side = position['side']
+                entry_price = position['entry_price']
+                stop_loss = position['stop_loss']
+                tp_2r = position.get('tp_2r', 0)
+                tp_4r = position.get('tp_4r', 0)
+
+                # Get current price using ticker (real-time)
+                current_price = self.exchange.get_last_price(symbol)
+                if not current_price or current_price == 0:
+                    continue
+
+                # Check stop loss (FAST enforcement)
+                if side == 'long':
+                    if current_price <= stop_loss:
+                        positions_to_close.append((position, current_price, "Stop loss hit (FAST STOP)"))
+                        continue
+                else:  # short
+                    if current_price >= stop_loss:
+                        positions_to_close.append((position, current_price, "Stop loss hit (FAST STOP)"))
+                        continue
+
+                # Check take profit targets
+                if side == 'long':
+                    if current_price >= tp_4r:
+                        positions_to_close.append((position, current_price, "4R target hit (FAST STOP)"))
+                        continue
+                    elif current_price >= tp_2r:
+                        # Move to breakeven if not already done
+                        if 'breakeven_moved' not in position:
+                            position['breakeven_moved'] = True
+                            position['stop_loss'] = entry_price * 1.001
+                            self.logger.info(f"[FastStop] {symbol} {side} | 2R hit, SL moved to breakeven")
+                else:  # short
+                    if current_price <= tp_4r:
+                        positions_to_close.append((position, current_price, "4R target hit (FAST STOP)"))
+                        continue
+                    elif current_price <= tp_2r:
+                        if 'breakeven_moved' not in position:
+                            position['breakeven_moved'] = True
+                            position['stop_loss'] = entry_price * 0.999
+                            self.logger.info(f"[FastStop] {symbol} {side} | 2R hit, SL moved to breakeven")
+
+            except Exception as e:
+                self.logger.error(f"[FastStop] Error checking {position.get('symbol', 'UNKNOWN')}: {e}")
+                continue
+
+        # Close positions with FAST STOP marker in logging
+        for position, exit_price, reason in positions_to_close:
+            symbol = position['symbol']
+            side = position['side']
+            entry = position['entry_price']
+            stop = position['stop_loss']
+
+            # Calculate slippage
+            if side == 'long':
+                slip_pct = ((exit_price / stop) - 1) * 100 if stop > 0 else 0
+            else:
+                slip_pct = ((stop / exit_price) - 1) * 100 if exit_price > 0 else 0
+
+            # Calculate R-multiple
+            risk_per_unit = abs(entry - stop)
+            actual_pnl_per_unit = (exit_price - entry) if side == 'long' else (entry - exit_price)
+            r_multiple = actual_pnl_per_unit / risk_per_unit if risk_per_unit > 0 else 0
+
+            self.logger.info(
+                f"[FastStop] Closing {symbol} {side} | price={exit_price:.6f} "
+                f"{'<=' if side == 'long' else '>='} stop={stop:.6f} | "
+                f"slip={slip_pct:+.2f}% | R={r_multiple:.2f}"
+            )
+
+            self.risk_engine.close_position(position, exit_price, reason)
+
     def _process_signals(self, signals: list):
         """
         Process new trading signals
@@ -419,31 +516,87 @@ class AlphaSniperBot:
                 self.logger.error(f"DFE | Error running dynamic filter adjustment: {e}")
                 self.logger.exception(e)
 
+    async def scan_loop(self):
+        """
+        SCAN LOOP (slow, CPU-heavy)
+        - Runs every SCAN_INTERVAL_SECONDS (e.g. 300s)
+        - Updates regime
+        - Scans universe for signals
+        - Opens new positions
+        - Runs DFE daily at 00:05 UTC
+        """
+        self.logger.info("🔄 SCAN LOOP started")
+
+        # Run first cycle immediately
+        self.trading_cycle()
+
+        # Setup DFE scheduling if enabled
+        if self.config.dfe_enabled:
+            schedule.every().day.at("00:05").do(self.run_dfe)
+            self.logger.info("🔧 DFE enabled - scheduled daily at 00:05 UTC")
+        else:
+            self.logger.info("🔧 DFE disabled - filters will not auto-adjust")
+
+        last_scan_time = time.time()
+
+        while self.running:
+            try:
+                current_time = time.time()
+                elapsed = current_time - last_scan_time
+
+                # Check if it's time to run next scan
+                if elapsed >= self.config.scan_interval_seconds:
+                    self.trading_cycle()
+                    last_scan_time = current_time
+
+                # Check scheduled tasks (DFE)
+                schedule.run_pending()
+
+                # Short sleep to prevent CPU spinning
+                await asyncio.sleep(1)
+
+            except Exception as e:
+                self.logger.error(f"Error in scan_loop: {e}")
+                self.logger.exception(e)
+                await asyncio.sleep(5)  # Back off on error
+
+    async def position_loop(self):
+        """
+        POSITION LOOP (fast, lightweight)
+        - Runs every POSITION_CHECK_INTERVAL_SECONDS (e.g. 15s)
+        - Checks SL/TP for open positions only
+        - Does NOT scan universe or generate signals
+        - Does NOT update regime or filters
+        """
+        self.logger.info("⚡ POSITION LOOP (Fast Stop Manager) started")
+
+        # Wait a bit before starting to avoid conflicts with initial scan
+        await asyncio.sleep(self.config.position_check_interval_seconds)
+
+        while self.running:
+            try:
+                # Fast stop check
+                self._check_fast_stops()
+
+                # Save positions after any fast stop triggers
+                if self.risk_engine.open_positions:
+                    self.risk_engine.save_positions('positions.json')
+
+                # Sleep until next check
+                await asyncio.sleep(self.config.position_check_interval_seconds)
+
+            except Exception as e:
+                self.logger.error(f"Error in position_loop: {e}")
+                self.logger.exception(e)
+                await asyncio.sleep(5)  # Back off on error
+
     def run(self):
         """
-        Main run loop with scheduling
+        Main run loop - starts dual async loops (scan + position)
         """
         try:
-            # Run immediately on start
-            self.trading_cycle()
-
-            # Schedule regular runs
-            interval_sec = self.config.scan_interval_seconds
-            self.logger.info(f"⏰ Scheduling scans every {interval_sec} seconds")
-
-            schedule.every(interval_sec).seconds.do(self.trading_cycle)
-
-            # Schedule Dynamic Filter Engine at 00:05 UTC daily
-            if self.config.dfe_enabled:
-                schedule.every().day.at("00:05").do(self.run_dfe)
-                self.logger.info("🔧 DFE enabled - scheduled daily at 00:05 UTC")
-            else:
-                self.logger.info("🔧 DFE disabled - filters will not auto-adjust")
-
-            # Main loop
-            while self.running:
-                schedule.run_pending()
-                time.sleep(1)
+            # Run both loops concurrently using asyncio
+            asyncio.run(self._run_async())
 
         except KeyboardInterrupt:
             self.logger.info("")
@@ -470,6 +623,22 @@ class AlphaSniperBot:
                 pass  # Don't crash on Telegram failure
 
             self.shutdown()
+
+    async def _run_async(self):
+        """
+        Run both scan_loop and position_loop concurrently
+        """
+        try:
+            await asyncio.gather(
+                self.scan_loop(),
+                self.position_loop()
+            )
+        except asyncio.CancelledError:
+            self.logger.info("Async loops cancelled")
+        except Exception as e:
+            self.logger.error(f"Error in async loops: {e}")
+            self.logger.exception(e)
+            raise
 
     def shutdown(self):
         """

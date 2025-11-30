@@ -153,6 +153,12 @@ class ShortEngine:
 
         stop_loss = min(sl_atr, sl_swing)  # Use tighter stop
 
+        # Enforce minimum stop distance (Fast Stop Manager safety rail)
+        min_stop_distance = current_price * config.min_stop_pct_core
+        actual_stop_distance = stop_loss - current_price
+        if actual_stop_distance < min_stop_distance:
+            stop_loss = current_price + min_stop_distance
+
         # TP: 2R and 4R targets (downward)
         risk_per_unit = stop_loss - current_price
         tp_2r = current_price - (risk_per_unit * 2)

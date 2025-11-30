@@ -69,6 +69,12 @@ class Config:
         # Pump engine age limit (managed by DFE if enabled)
         self.pump_max_age_hours = int(os.getenv("PUMP_MAX_AGE_HOURS", 72))
 
+        # Fast Stop Manager (execution-level, NOT managed by DFE)
+        self.position_check_interval_seconds = int(os.getenv("POSITION_CHECK_INTERVAL_SECONDS", 15))
+        self.min_stop_pct_core = float(os.getenv("MIN_STOP_PCT_CORE", 0.02))
+        self.min_stop_pct_bear_micro = float(os.getenv("MIN_STOP_PCT_BEAR_MICRO", 0.06))
+        self.min_stop_pct_pump = float(os.getenv("MIN_STOP_PCT_PUMP", 0.08))
+
         if not self.sim_mode:
             if not self.mexc_api_key or not self.mexc_secret_key:
                 raise Exception("Live mode requires MEXC_API_KEY and MEXC_SECRET_KEY in the environment")
