@@ -279,6 +279,11 @@ class SimulatedExchange:
             'timestamp': int(time.time() * 1000)
         }
 
+    def get_last_price(self, symbol: str):
+        """Get latest price for Fast Stop Manager"""
+        ticker = self.get_ticker(symbol)
+        return ticker['last'] if ticker else None
+
     def get_orderbook(self, symbol: str):
         """Generate fake orderbook"""
         ticker = self.get_ticker(symbol)
@@ -410,6 +415,11 @@ class RealExchange:
         """Fetch ticker from MEXC"""
         return self._with_retries(lambda: self.client.fetch_ticker(symbol), f"fetch_ticker {symbol}")
 
+    def get_last_price(self, symbol: str):
+        """Get latest price for Fast Stop Manager"""
+        ticker = self.get_ticker(symbol)
+        return ticker['last'] if ticker else None
+
     def get_orderbook(self, symbol: str):
         """Fetch orderbook from MEXC"""
         return self._with_retries(lambda: self.client.fetch_order_book(symbol), f"fetch_orderbook {symbol}")
@@ -537,6 +547,11 @@ class DataOnlyMexcExchange:
     def get_ticker(self, symbol: str):
         """Fetch ticker from MEXC (public endpoint)"""
         return self._with_retries(lambda: self.client.fetch_ticker(symbol), f"fetch_ticker {symbol}")
+
+    def get_last_price(self, symbol: str):
+        """Get latest price for Fast Stop Manager"""
+        ticker = self.get_ticker(symbol)
+        return ticker['last'] if ticker else None
 
     def get_orderbook(self, symbol: str):
         """Fetch orderbook from MEXC (public endpoint)"""

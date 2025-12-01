@@ -132,6 +132,12 @@ class PumpEngine:
 
         stop_loss = max(sl_atr, sl_pct, swing_low * 0.99)
 
+        # Enforce minimum stop distance (Fast Stop Manager safety rail for pump)
+        min_stop_distance = current_price * config.min_stop_pct_pump
+        actual_stop_distance = current_price - stop_loss
+        if actual_stop_distance < min_stop_distance:
+            stop_loss = current_price - min_stop_distance
+
         # TP: Aggressive targets (1.5R and 3R for pumps)
         risk_per_unit = current_price - stop_loss
         tp_2r = current_price + (risk_per_unit * 1.5)
