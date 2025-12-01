@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from config import get_config
 from utils import setup_logger
 from utils.dynamic_filters import update_dynamic_filters
+from utils.entry_dete import EntryDETEngine
 from utils.telegram import TelegramNotifier
 from utils import helpers
 from exchange import create_exchange
@@ -71,6 +72,7 @@ class AlphaSniperBot:
         self.exchange = create_exchange(self.config, self.logger)  # Use factory
         self.risk_engine = RiskEngine(self.config, self.exchange, self.logger, self.telegram)
         self.scanner = Scanner(self.exchange, self.risk_engine, self.config, self.logger)
+        self.entry_dete_engine = EntryDETEngine(self.config, self.logger, self.exchange, self.risk_engine)
 
         # Rate limiting for error notifications (15 min cooldown)
         self.last_error_notification = 0
@@ -347,6 +349,7 @@ class AlphaSniperBot:
         self.logger.info(f"📡 Processing {len(signals)} signal(s)...")
 
         signals_opened = 0
+        signals_queued = 0
 
         for signal in signals:
             try:
@@ -356,6 +359,12 @@ class AlphaSniperBot:
                 if not can_open:
                     self.logger.debug(f"❌ Cannot open {signal['symbol']} {signal['engine']}: {reason}")
                     continue
+
+                # Entry-DETE: Queue signal instead of opening immediately
+                if self.config.entry_dete_enabled:
+                    self.entry_dete_engine.queue_signal(signal)
+                    signals_queued += 1
+                    continue  # Skip immediate entry logic below
 
                 # Get current price (use entry_price from signal)
                 entry_price = signal['entry_price']
@@ -486,10 +495,13 @@ class AlphaSniperBot:
                 self.logger.error(f"Error processing signal {signal.get('symbol', 'UNKNOWN')}: {e}")
                 continue
 
+        # Log results
+        if signals_queued > 0:
+            self.logger.info(f"🎯 Queued {signals_queued} signal(s) for Entry-DETE confirmation")
         if signals_opened > 0:
             self.logger.info(f"✅ Opened {signals_opened} new position(s)")
-        else:
-            self.logger.info("📊 No new positions opened")
+        if signals_opened == 0 and signals_queued == 0:
+            self.logger.info("📊 No new positions opened or queued")
 
     def _log_cycle_summary(self):
         """
@@ -578,7 +590,11 @@ class AlphaSniperBot:
                 # Fast stop check
                 self._check_fast_stops()
 
-                # Save positions after any fast stop triggers
+                # Entry-DETE: Process pending signals for micro-confirmation
+                if self.config.entry_dete_enabled:
+                    self.entry_dete_engine.process_pending()
+
+                # Save positions after any fast stop triggers or Entry-DETE openings
                 if self.risk_engine.open_positions:
                     self.risk_engine.save_positions('positions.json')
 

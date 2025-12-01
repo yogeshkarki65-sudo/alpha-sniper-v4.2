@@ -75,6 +75,14 @@ class Config:
         self.min_stop_pct_bear_micro = float(os.getenv("MIN_STOP_PCT_BEAR_MICRO", 0.06))
         self.min_stop_pct_pump = float(os.getenv("MIN_STOP_PCT_PUMP", 0.08))
 
+        # Entry-DETE (Smart Entry Timing Engine) - execution-level, NOT managed by DFE
+        self.entry_dete_enabled = self.parse_bool(os.getenv("ENTRY_DETE_ENABLED", "false"))
+        self.entry_dete_max_wait_seconds = int(os.getenv("ENTRY_DETE_MAX_WAIT_SECONDS", 180))
+        self.entry_dete_min_triggers = int(os.getenv("ENTRY_DETE_MIN_TRIGGERS", 2))
+        self.entry_dete_min_dip_pct = float(os.getenv("ENTRY_DETE_MIN_DIP_PCT", 0.005))  # 0.5%
+        self.entry_dete_max_dip_pct = float(os.getenv("ENTRY_DETE_MAX_DIP_PCT", 0.02))   # 2.0%
+        self.entry_dete_volume_multiplier = float(os.getenv("ENTRY_DETE_VOLUME_MULTIPLIER", 1.1))
+
         if not self.sim_mode:
             if not self.mexc_api_key or not self.mexc_secret_key:
                 raise Exception("Live mode requires MEXC_API_KEY and MEXC_SECRET_KEY in the environment")
