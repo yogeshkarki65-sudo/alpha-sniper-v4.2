@@ -22,6 +22,7 @@ from config import get_config
 from utils import setup_logger
 from utils.dynamic_filters import update_dynamic_filters
 from utils.entry_dete import EntryDETEngine
+from utils.pump_trailer import PumpTrailer
 from utils.telegram import TelegramNotifier
 from utils import helpers
 from exchange import create_exchange
@@ -73,6 +74,7 @@ class AlphaSniperBot:
         self.risk_engine = RiskEngine(self.config, self.exchange, self.logger, self.telegram)
         self.scanner = Scanner(self.exchange, self.risk_engine, self.config, self.logger)
         self.entry_dete_engine = EntryDETEngine(self.config, self.logger, self.exchange, self.risk_engine)
+        self.pump_trailer = PumpTrailer(self.config, self.logger)
 
         # Rate limiting for error notifications (15 min cooldown)
         self.last_error_notification = 0
@@ -342,6 +344,54 @@ class AlphaSniperBot:
 
             self.risk_engine.close_position(position, exit_price, reason)
 
+    def _update_pump_trailing_stops(self):
+        """
+        Update ATR-based trailing stops for pump positions
+        Runs every POSITION_CHECK_INTERVAL_SECONDS (e.g. 15s) as part of position loop
+        """
+        if not self.risk_engine.open_positions:
+            return  # No positions to update
+
+        for position in self.risk_engine.open_positions:
+            try:
+                # Only process pump positions
+                if position.get('engine') != 'pump':
+                    continue
+
+                # Check if this position should be trailed
+                if not self.pump_trailer.should_trail(position):
+                    continue
+
+                symbol = position['symbol']
+
+                # Get current price
+                current_price = self.exchange.get_last_price(symbol)
+                if not current_price or current_price == 0:
+                    self.logger.debug(f"[PumpTrailer] Skipping {symbol}: no price data")
+                    continue
+
+                # Get 15m klines for ATR calculation
+                klines = self.exchange.get_klines(symbol, '15m', limit=20)
+                if not klines or len(klines) < 15:
+                    self.logger.debug(f"[PumpTrailer] Skipping {symbol}: insufficient kline data")
+                    continue
+
+                # Convert to dataframe and calculate ATR
+                df_15m = helpers.ohlcv_to_dataframe(klines)
+                atr_series = helpers.calculate_atr(df_15m, 14)
+                if atr_series is None or len(atr_series) == 0:
+                    self.logger.debug(f"[PumpTrailer] Skipping {symbol}: ATR calculation failed")
+                    continue
+
+                atr_15m = atr_series.iloc[-1]
+
+                # Update trailing stop
+                self.pump_trailer.update(position, current_price, atr_15m)
+
+            except Exception as e:
+                self.logger.debug(f"[PumpTrailer] Error updating {position.get('symbol', 'UNKNOWN')}: {e}")
+                continue
+
     def _process_signals(self, signals: list):
         """
         Process new trading signals
@@ -593,6 +643,9 @@ class AlphaSniperBot:
                 # Entry-DETE: Process pending signals for micro-confirmation
                 if self.config.entry_dete_enabled:
                     self.entry_dete_engine.process_pending()
+
+                # Pump Trailer: Update trailing stops for pump positions
+                self._update_pump_trailing_stops()
 
                 # Save positions after any fast stop triggers or Entry-DETE openings
                 if self.risk_engine.open_positions:

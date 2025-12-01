@@ -83,6 +83,24 @@ class Config:
         self.entry_dete_max_dip_pct = float(os.getenv("ENTRY_DETE_MAX_DIP_PCT", 0.02))   # 2.0%
         self.entry_dete_volume_multiplier = float(os.getenv("ENTRY_DETE_VOLUME_MULTIPLIER", 1.1))
 
+        # === PUMP-ONLY MODE ===
+        # Simplified mode that uses ONLY the pump engine with stricter filters
+        self.pump_only_mode = self.parse_bool(os.getenv("PUMP_ONLY_MODE", "false"))
+
+        # Stricter pump filters for pump-only mode
+        self.pump_min_24h_return = float(os.getenv("PUMP_MIN_24H_RETURN", 0.80))  # 80% min
+        self.pump_max_24h_return = float(os.getenv("PUMP_MAX_24H_RETURN", 3.50))  # 350% max
+        self.pump_min_rvol = float(os.getenv("PUMP_MIN_RVOL", 2.8))  # 2.8x avg volume
+        self.pump_min_momentum_1h = float(os.getenv("PUMP_MIN_MOMENTUM_1H", 40))  # 40% 1h momentum
+        self.pump_min_24h_quote_volume = float(os.getenv("PUMP_MIN_24H_QUOTE_VOLUME", 800000))  # $800k
+        self.pump_min_score = int(os.getenv("PUMP_MIN_SCORE", 85))  # Score >= 85
+        self.pump_max_hold_hours = int(os.getenv("PUMP_MAX_HOLD_HOURS", 4))  # Max 4 hours
+
+        # Pump ATR-based trailing stop
+        self.pump_trail_initial_atr_mult = float(os.getenv("PUMP_TRAIL_INITIAL_ATR_MULT", 2.0))
+        self.pump_trail_atr_mult = float(os.getenv("PUMP_TRAIL_ATR_MULT", 1.2))
+        self.pump_trail_start_minutes = int(os.getenv("PUMP_TRAIL_START_MINUTES", 30))
+
         if not self.sim_mode:
             if not self.mexc_api_key or not self.mexc_secret_key:
                 raise Exception("Live mode requires MEXC_API_KEY and MEXC_SECRET_KEY in the environment")

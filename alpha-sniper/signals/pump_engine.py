@@ -54,8 +54,9 @@ class PumpEngine:
         if df_1h is None or len(df_1h) < 20:
             return None
 
-        # Pump-specific volume filter
-        if volume_24h < self.config.min_24h_quote_volume:
+        # Pump-specific volume filter (stricter in pump-only mode)
+        min_volume = self.config.pump_min_24h_quote_volume if self.config.pump_only_mode else self.config.min_24h_quote_volume
+        if volume_24h < min_volume:
             return None
 
         # Pump spread filter (slightly looser than standard)
@@ -79,10 +80,17 @@ class PumpEngine:
         else:
             return_24h = 0
 
-        # Pump filters (very strict)
-        rvol_check = rvol >= 2.0
-        momentum_check = momentum_1h >= 25
-        return_check = 30 <= return_24h <= 400  # Not too early, not too late
+        # Pump filters (stricter in pump-only mode)
+        if self.config.pump_only_mode:
+            # PUMP-ONLY MODE: Use stricter filters
+            rvol_check = rvol >= self.config.pump_min_rvol
+            momentum_check = momentum_1h >= self.config.pump_min_momentum_1h
+            return_check = self.config.pump_min_24h_return <= return_24h <= self.config.pump_max_24h_return
+        else:
+            # NORMAL MODE: Standard pump filters
+            rvol_check = rvol >= 2.0
+            momentum_check = momentum_1h >= 25
+            return_check = 30 <= return_24h <= 400  # Not too early, not too late
 
         # Calculate score
         score = 0
@@ -114,8 +122,9 @@ class PumpEngine:
         elif volume_24h > 200000:
             score += 5
 
-        # Check minimum score (pumps have lower threshold to catch fast movers)
-        if score < 70:
+        # Check minimum score (stricter in pump-only mode)
+        min_score = self.config.pump_min_score if self.config.pump_only_mode else 70
+        if score < min_score:
             return None
 
         # Check all core conditions
@@ -133,7 +142,7 @@ class PumpEngine:
         stop_loss = max(sl_atr, sl_pct, swing_low * 0.99)
 
         # Enforce minimum stop distance (Fast Stop Manager safety rail for pump)
-        min_stop_distance = current_price * config.min_stop_pct_pump
+        min_stop_distance = current_price * self.config.min_stop_pct_pump
         actual_stop_distance = current_price - stop_loss
         if actual_stop_distance < min_stop_distance:
             stop_loss = current_price - min_stop_distance
@@ -142,6 +151,9 @@ class PumpEngine:
         risk_per_unit = current_price - stop_loss
         tp_2r = current_price + (risk_per_unit * 1.5)
         tp_4r = current_price + (risk_per_unit * 3)
+
+        # Max hold hours (shorter in pump-only mode)
+        max_hold_hours = self.config.pump_max_hold_hours if self.config.pump_only_mode else 6
 
         # Return signal
         return {
@@ -157,6 +169,6 @@ class PumpEngine:
             'momentum_1h': momentum_1h,
             'return_24h': return_24h,
             'volume_24h': volume_24h,
-            'max_hold_hours': 6,  # Max 6 hour hold
+            'max_hold_hours': max_hold_hours,
             'regime': regime
         }
