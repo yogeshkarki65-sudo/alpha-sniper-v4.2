@@ -1,0 +1,48 @@
+[Unit]
+Description=Alpha Sniper V4.2 Trading Bot (LIVE TRADING - REAL MONEY!)
+Documentation=https://github.com/yogeshkarki65-sudo/alpha-sniper-v4.2
+After=network.target
+Wants=network-online.target
+
+# WARNING: This service trades with REAL MONEY
+# Double-check configuration before enabling!
+
+[Service]
+Type=simple
+User=alpha-sniper
+Group=alpha-sniper
+WorkingDirectory=/opt/alpha-sniper
+
+# Environment file with LIVE credentials
+EnvironmentFile=/etc/alpha-sniper/alpha-sniper-live.env
+
+# Execute the bot in LIVE mode
+# NOTE: This will prompt for confirmation in interactive mode
+# For systemd, ensure SIM_MODE=false in env file
+ExecStart=/opt/alpha-sniper/venv/bin/python /opt/alpha-sniper/run.py --mode live
+
+# Restart policy - be careful with auto-restart in live mode!
+# Consider Restart=on-failure instead of always
+Restart=always
+RestartSec=15
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=alpha-sniper-live
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+
+# Resource limits
+MemoryMax=2G
+CPUQuota=100%
+
+# Graceful shutdown with extra time for position cleanup
+TimeoutStopSec=60
+KillMode=mixed
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target
