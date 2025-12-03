@@ -104,6 +104,17 @@ class AlphaSniperBot:
         Main trading cycle - runs every scan interval
         """
         try:
+            # Sync equity from MEXC in LIVE mode
+            if not self.config.sim_mode:
+                try:
+                    live_equity = self.exchange.get_total_usdt_balance()
+                    if live_equity is not None and live_equity > 0:
+                        self.risk_engine.update_equity(live_equity)
+                    else:
+                        self.logger.warning("⚠️ Failed to fetch MEXC balance, using cached equity")
+                except Exception as e:
+                    self.logger.error(f"⚠️ Error syncing MEXC equity: {e}, using cached equity")
+
             # Enhanced cycle header with key info
             cycle_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             regime = self.risk_engine.current_regime or "UNKNOWN"

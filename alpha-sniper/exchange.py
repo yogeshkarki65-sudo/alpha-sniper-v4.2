@@ -498,6 +498,29 @@ class RealExchange:
         """Fetch balance from MEXC"""
         return self._with_retries(lambda: self.client.fetch_balance(), "fetch_balance")
 
+    def get_total_usdt_balance(self):
+        """
+        Get total USDT balance (free + used) from MEXC spot account
+        Returns: float (total USDT balance)
+        """
+        try:
+            balance = self.fetch_balance()
+            if not balance:
+                self.logger.error("Failed to fetch balance from MEXC")
+                return None
+
+            # Get USDT balance (free + used)
+            usdt_free = balance.get('USDT', {}).get('free', 0) or 0
+            usdt_used = balance.get('USDT', {}).get('used', 0) or 0
+            total_usdt = usdt_free + usdt_used
+
+            self.logger.debug(f"MEXC USDT Balance: free={usdt_free:.2f}, used={usdt_used:.2f}, total={total_usdt:.2f}")
+            return total_usdt
+
+        except Exception as e:
+            self.logger.error(f"Error fetching USDT balance: {e}")
+            return None
+
 
 # Factory function
 class DataOnlyMexcExchange:

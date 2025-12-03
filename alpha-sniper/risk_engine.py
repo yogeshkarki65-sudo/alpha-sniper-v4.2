@@ -109,6 +109,25 @@ class RiskEngine:
 
         self.logger.info(f"💰 RiskEngine initialized | Starting equity: ${self.starting_equity:.2f}")
 
+    def update_equity(self, new_equity: float):
+        """
+        Update current equity (used in LIVE mode to sync with MEXC balance)
+
+        Args:
+            new_equity: New equity value from exchange
+        """
+        if new_equity is None or new_equity <= 0:
+            self.logger.warning(f"Invalid equity value received: {new_equity}, keeping current: ${self.current_equity:.2f}")
+            return
+
+        old_equity = self.current_equity
+        self.current_equity = new_equity
+
+        # Log equity changes (but not too frequently)
+        equity_change_pct = ((new_equity - old_equity) / old_equity * 100) if old_equity > 0 else 0
+        if abs(equity_change_pct) > 0.1:  # Only log if change > 0.1%
+            self.logger.info(f"💰 Equity updated: ${old_equity:.2f} → ${new_equity:.2f} ({equity_change_pct:+.2f}%)")
+
     def get_symbol_bucket(self, symbol: str) -> str:
         """
         === UPGRADE E: Correlation-Aware Portfolio Heat ===
