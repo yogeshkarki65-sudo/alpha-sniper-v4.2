@@ -80,16 +80,28 @@ class AlphaSniperBot:
         self.last_error_notification = 0
         self.error_notification_cooldown = 900  # 15 minutes in seconds
 
+        # Track if we've sent first equity sync notification
+        self.first_equity_sync_notified = False
+
         # Send startup notification
         sim_data_source = getattr(self.config, 'sim_data_source', 'FAKE')
         regime = self.risk_engine.current_regime if self.risk_engine.current_regime else 'UNKNOWN'
+
+        mode_str = 'SIM' if self.config.sim_mode else 'LIVE'
+        pump_only_str = ' (PUMP-ONLY)' if self.config.pump_only_mode else ''
+
         startup_msg = (
             f"🚀 Alpha Sniper V4.2 started\n"
-            f"Mode: {'SIM' if self.config.sim_mode else 'LIVE'}\n"
+            f"Mode: {mode_str}{pump_only_str}\n"
             f"Data: {sim_data_source if self.config.sim_mode else 'LIVE'}\n"
-            f"Starting Equity: ${self.config.starting_equity:.2f}\n"
-            f"Regime: {regime}"
+            f"Config Equity: ${self.config.starting_equity:.2f} (risk baseline)\n"
+            f"Regime: {regime}\n"
         )
+
+        # Add note about LIVE equity syncing
+        if not self.config.sim_mode:
+            startup_msg += f"Note: Equity will sync from MEXC balance shortly"
+
         self.logger.info(f"[TELEGRAM] Sending startup notification")
         self.telegram.send(startup_msg)
 
@@ -109,7 +121,19 @@ class AlphaSniperBot:
                 try:
                     live_equity = self.exchange.get_total_usdt_balance()
                     if live_equity is not None and live_equity > 0:
+                        old_equity = self.risk_engine.current_equity
                         self.risk_engine.update_equity(live_equity)
+
+                        # Send Telegram notification on first equity sync (when different from config)
+                        if not self.first_equity_sync_notified and abs(old_equity - self.config.starting_equity) < 0.01 and abs(live_equity - old_equity) > 0.01:
+                            equity_msg = (
+                                f"💰 Equity synced from MEXC\n"
+                                f"Config: ${self.config.starting_equity:.2f}\n"
+                                f"MEXC Balance: ${live_equity:.2f}"
+                            )
+                            self.telegram.send(equity_msg)
+                            self.logger.info(f"[TELEGRAM] Sent equity sync notification")
+                            self.first_equity_sync_notified = True
                     else:
                         self.logger.warning("⚠️ Failed to fetch MEXC balance, using cached equity")
                 except Exception as e:

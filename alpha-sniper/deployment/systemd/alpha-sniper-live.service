@@ -3,6 +3,7 @@ Description=Alpha Sniper V4.2 Trading Bot (LIVE TRADING - REAL MONEY!)
 Documentation=https://github.com/yogeshkarki65-sudo/alpha-sniper-v4.2
 After=network.target
 Wants=network-online.target
+OnFailure=alpha-sniper-live-crash-notify.service
 
 # WARNING: This service trades with REAL MONEY
 # Double-check configuration before enabling!
