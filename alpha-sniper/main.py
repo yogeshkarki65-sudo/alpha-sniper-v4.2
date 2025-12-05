@@ -124,7 +124,7 @@ class AlphaSniperBot:
                         if not self.first_equity_sync_notified and abs(old_equity - self.config.starting_equity) < 0.01 and abs(live_equity - old_equity) > 0.01:
                             self.alert_mgr.send_equity_sync(
                                 config_equity=self.config.starting_equity,
-                                live_equity=live_equity
+                                mexc_balance=live_equity
                             )
                             self.logger.info(f"[TELEGRAM] Sent enhanced equity sync notification")
                             self.first_equity_sync_notified = True

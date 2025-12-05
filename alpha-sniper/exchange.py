@@ -465,7 +465,10 @@ class RealExchange(BaseExchange):
                 # === FUNDING RATE SPAM SUPPRESSION ===
                 # Check if this is a funding rate call with "contract does not exist" error
                 is_funding_call = 'fetch_funding_rate' in label.lower()
-                is_contract_error = ('Contract does not exist' in error_str or 'Contract does not exist' in error_repr) and '"code":1001' in error_repr
+                # Check for both "Contract does not exist" message and code 1001 (with various JSON formatting)
+                has_contract_error_msg = 'Contract does not exist' in error_str or 'Contract does not exist' in error_repr
+                has_code_1001 = ('code":1001' in error_repr or 'code": 1001' in error_repr or 'code:1001' in error_repr)
+                is_contract_error = has_contract_error_msg and has_code_1001
 
                 if is_funding_call and is_contract_error:
                     # Extract symbol from label if available
@@ -669,7 +672,10 @@ class DataOnlyMexcExchange(BaseExchange):
                 # === FUNDING RATE SPAM SUPPRESSION ===
                 # Check if this is a funding rate call with "contract does not exist" error
                 is_funding_call = 'fetch_funding_rate' in label.lower()
-                is_contract_error = ('Contract does not exist' in error_str or 'Contract does not exist' in error_repr) and '"code":1001' in error_repr
+                # Check for both "Contract does not exist" message and code 1001 (with various JSON formatting)
+                has_contract_error_msg = 'Contract does not exist' in error_str or 'Contract does not exist' in error_repr
+                has_code_1001 = ('code":1001' in error_repr or 'code": 1001' in error_repr or 'code:1001' in error_repr)
+                is_contract_error = has_contract_error_msg and has_code_1001
 
                 if is_funding_call and is_contract_error:
                     # Extract symbol from label if available
