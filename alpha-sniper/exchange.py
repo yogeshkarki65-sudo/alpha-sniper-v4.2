@@ -1,6 +1,11 @@
 """
 Exchange wrapper for Alpha Sniper V4.2
 Supports both Real (MEXC) and Simulated modes
+
+IMPROVEMENTS:
+- Enhanced _with_retries with funding-rate spam suppression
+- Clean BaseExchange interface
+- Robust error handling with exponential backoff
 """
 import ccxt
 import time
@@ -10,7 +15,45 @@ import numpy as np
 from datetime import datetime, timedelta
 
 
-class SimulatedExchange:
+class BaseExchange:
+    """
+    Base exchange interface - defines the contract all exchanges must implement
+    """
+    def get_markets(self):
+        raise NotImplementedError
+
+    def get_klines(self, symbol: str, timeframe: str, limit: int = 200):
+        raise NotImplementedError
+
+    def get_ticker(self, symbol: str):
+        raise NotImplementedError
+
+    def get_last_price(self, symbol: str):
+        raise NotImplementedError
+
+    def get_orderbook(self, symbol: str):
+        raise NotImplementedError
+
+    def get_funding_rate(self, symbol: str):
+        raise NotImplementedError
+
+    def get_liquidity_metrics(self, symbol: str):
+        raise NotImplementedError
+
+    def create_order(self, symbol, type, side, amount, price=None, params=None):
+        raise NotImplementedError
+
+    def fetch_open_positions(self):
+        raise NotImplementedError
+
+    def cancel_order(self, order_id, symbol=None):
+        raise NotImplementedError
+
+    def fetch_balance(self):
+        raise NotImplementedError
+
+
+class SimulatedExchange(BaseExchange):
     """
     Simulated exchange for SIM_MODE
     No real API calls, generates fake but coherent data
@@ -366,10 +409,15 @@ class SimulatedExchange:
         }
 
 
-class RealExchange:
+class RealExchange(BaseExchange):
     """
     Real exchange wrapper for LIVE mode
     Uses actual MEXC via ccxt
+
+    IMPROVEMENTS:
+    - Enhanced _with_retries with funding-rate spam suppression
+    - Exponential backoff retry strategy
+    - Clean error handling without log flooding
     """
     def __init__(self, config, logger):
         self.config = config
@@ -388,15 +436,54 @@ class RealExchange:
         self.logger.info("🌐 RealExchange initialized (LIVE mode with MEXC)")
 
     def _with_retries(self, func, label: str, max_attempts: int = 3, delay_sec: float = 2.0):
-        """Retry wrapper for network calls"""
+        """
+        Retry wrapper for network calls with exponential backoff
+
+        SPAM SUPPRESSION FOR FUNDING RATE ERRORS:
+        - If label contains "fetch_funding_rate" or "fetch_funding_rate_history"
+          AND the exception contains both "Contract does not exist" AND code 1001:
+            - Log exactly one debug line
+            - Return None immediately (no retries, no ERROR logs)
+        - For all other errors: normal retry behavior with ERROR logging
+
+        Args:
+            func: Function to call
+            label: Description for logging
+            max_attempts: Max retry attempts (default: 3)
+            delay_sec: Initial delay between retries (default: 2.0s)
+
+        Returns:
+            Result from func(), or None on failure
+        """
         for attempt in range(max_attempts):
             try:
                 return func()
             except Exception as e:
-                self.logger.error(f"Error on attempt {attempt + 1}/{max_attempts}: {label} - {repr(e)}")
-                if attempt < max_attempts - 1:
-                    time.sleep(delay_sec)
+                error_str = str(e)
+                error_repr = repr(e)
 
+                # === FUNDING RATE SPAM SUPPRESSION ===
+                # Check if this is a funding rate call with "contract does not exist" error
+                is_funding_call = 'fetch_funding_rate' in label.lower()
+                is_contract_error = ('Contract does not exist' in error_str or 'Contract does not exist' in error_repr) and '"code":1001' in error_repr
+
+                if is_funding_call and is_contract_error:
+                    # Extract symbol from label if available
+                    symbol_part = label.replace('fetch_funding_rate', '').replace('fetch_funding_rate_history', '').strip()
+                    self.logger.debug(f"Skipping funding rate for {symbol_part}: contract does not exist on exchange (code 1001)")
+                    return None  # Return immediately, no retries, no ERROR logs
+
+                # === NORMAL ERROR HANDLING ===
+                # Log error for non-funding-rate calls or different errors
+                self.logger.error(f"Error on attempt {attempt + 1}/{max_attempts}: {label} - {error_repr}")
+
+                if attempt < max_attempts - 1:
+                    # Exponential backoff: 2s, 4s, 8s
+                    backoff = delay_sec * (2 ** attempt)
+                    self.logger.debug(f"Retrying after {backoff:.1f}s...")
+                    time.sleep(backoff)
+
+        # Max retries exceeded
         self.logger.error(f"Max retries exceeded for: {label}")
         return None
 
@@ -425,7 +512,13 @@ class RealExchange:
         return self._with_retries(lambda: self.client.fetch_order_book(symbol), f"fetch_orderbook {symbol}")
 
     def get_funding_rate(self, symbol: str):
-        """Fetch funding rate from MEXC"""
+        """
+        Fetch funding rate from MEXC
+
+        Note: This uses _with_retries which has spam suppression for
+        "Contract does not exist" errors (MEXC code 1001).
+        Returns 0 if symbol has no futures contract.
+        """
         try:
             funding = self._with_retries(
                 lambda: self.client.fetch_funding_rate(symbol),
@@ -433,8 +526,9 @@ class RealExchange:
             )
             if funding:
                 return funding.get('fundingRate', 0)
-        except:
-            pass
+        except Exception as e:
+            # This catch is for any errors NOT caught by _with_retries
+            self.logger.debug(f"Unexpected error fetching funding rate for {symbol}: {e}")
         return 0
 
     def get_liquidity_metrics(self, symbol: str):
@@ -522,12 +616,16 @@ class RealExchange:
             return None
 
 
-# Factory function
-class DataOnlyMexcExchange:
+class DataOnlyMexcExchange(BaseExchange):
     """
     Data-only exchange for SIM mode with LIVE_DATA
     Uses real MEXC market data via public API (no authentication)
     Does NOT place real orders - for paper trading only
+
+    IMPROVEMENTS:
+    - Enhanced _with_retries with funding-rate spam suppression
+    - Exponential backoff retry strategy
+    - Clean error handling without log flooding
     """
     def __init__(self, config, logger):
         self.config = config
@@ -542,17 +640,54 @@ class DataOnlyMexcExchange:
         self.logger.info("🌐 DataOnlyMexcExchange initialized (REAL MEXC data, PAPER trading only)")
 
     def _with_retries(self, func, label: str, max_attempts: int = 3, delay_sec: float = 2.0):
-        """Retry wrapper for network calls with exponential backoff"""
+        """
+        Retry wrapper for network calls with exponential backoff
+
+        SPAM SUPPRESSION FOR FUNDING RATE ERRORS:
+        - If label contains "fetch_funding_rate" or "fetch_funding_rate_history"
+          AND the exception contains both "Contract does not exist" AND code 1001:
+            - Log exactly one debug line
+            - Return None immediately (no retries, no ERROR logs)
+        - For all other errors: normal retry behavior with ERROR logging
+
+        Args:
+            func: Function to call
+            label: Description for logging
+            max_attempts: Max retry attempts (default: 3)
+            delay_sec: Initial delay between retries (default: 2.0s)
+
+        Returns:
+            Result from func(), or None on failure
+        """
         for attempt in range(max_attempts):
             try:
                 return func()
             except Exception as e:
-                self.logger.error(f"Error on attempt {attempt + 1}/{max_attempts}: {label} - {repr(e)}")
+                error_str = str(e)
+                error_repr = repr(e)
+
+                # === FUNDING RATE SPAM SUPPRESSION ===
+                # Check if this is a funding rate call with "contract does not exist" error
+                is_funding_call = 'fetch_funding_rate' in label.lower()
+                is_contract_error = ('Contract does not exist' in error_str or 'Contract does not exist' in error_repr) and '"code":1001' in error_repr
+
+                if is_funding_call and is_contract_error:
+                    # Extract symbol from label if available
+                    symbol_part = label.replace('fetch_funding_rate', '').replace('fetch_funding_rate_history', '').strip()
+                    self.logger.debug(f"Skipping funding rate for {symbol_part}: contract does not exist on exchange (code 1001)")
+                    return None  # Return immediately, no retries, no ERROR logs
+
+                # === NORMAL ERROR HANDLING ===
+                # Log error for non-funding-rate calls or different errors
+                self.logger.error(f"Error on attempt {attempt + 1}/{max_attempts}: {label} - {error_repr}")
+
                 if attempt < max_attempts - 1:
                     # Exponential backoff: 2s, 4s, 8s
                     backoff = delay_sec * (2 ** attempt)
+                    self.logger.debug(f"Retrying after {backoff:.1f}s...")
                     time.sleep(backoff)
 
+        # Max retries exceeded
         self.logger.error(f"Max retries exceeded for: {label}")
         return None
 
@@ -596,6 +731,9 @@ class DataOnlyMexcExchange:
         Example:
             >>> ex.get_funding_rate("BTC/USDT")
             0.000100  # 0.01% funding rate
+
+        Note: Uses _with_retries which has spam suppression for
+        "Contract does not exist" errors (MEXC code 1001).
         """
         try:
             # Convert spot symbol to MEXC contract format
@@ -606,20 +744,26 @@ class DataOnlyMexcExchange:
             import requests
 
             url = "https://contract.mexc.com/api/v1/contract/funding_rate/" + contract_symbol
-            response = requests.get(url, timeout=5)
 
-            if response.status_code == 200:
-                data = response.json()
-                if data and 'data' in data and data['data']:
-                    # MEXC returns funding rate as a decimal
-                    rate = float(data['data'].get('fundingRate', 0))
-                    self.logger.debug(f"[Funding] {symbol} | funding_8h={rate:.6f}")
-                    return rate
+            # Wrap in _with_retries for consistency and spam suppression
+            def fetch_funding():
+                response = requests.get(url, timeout=5)
+                if response.status_code == 200:
+                    data = response.json()
+                    if data and 'data' in data and data['data']:
+                        rate = float(data['data'].get('fundingRate', 0))
+                        return rate
+                    else:
+                        return 0.0
                 else:
-                    self.logger.debug(f"[Funding] No funding data for {symbol}, defaulting to 0.0")
-                    return 0.0
+                    # Raise exception to trigger retry logic
+                    raise Exception(f"API returned {response.status_code}")
+
+            rate = self._with_retries(fetch_funding, f"fetch_funding_rate {symbol}")
+            if rate is not None:
+                self.logger.debug(f"[Funding] {symbol} | funding_8h={rate:.6f}")
+                return rate
             else:
-                self.logger.debug(f"[Funding] API returned {response.status_code} for {symbol}, defaulting to 0.0")
                 return 0.0
 
         except Exception as e:
@@ -663,6 +807,47 @@ class DataOnlyMexcExchange:
         except Exception as e:
             self.logger.debug(f"Error getting liquidity metrics for {symbol}: {e}")
             return {'spread_pct': 1.0, 'depth_usd': 5000}
+
+    # === PAPER TRADING METHODS (No real orders) ===
+
+    def create_order(self, symbol, type, side, amount, price=None, params=None):
+        """
+        PAPER TRADING: Simulate order (no real execution)
+        """
+        self.logger.info(f"[PAPER] Order simulated: {side} {amount} {symbol} @ market")
+        ticker = self.get_ticker(symbol)
+        fill_price = ticker['last'] if ticker else 0
+
+        return {
+            'id': f'paper_{int(time.time())}_{random.randint(1000, 9999)}',
+            'symbol': symbol,
+            'type': type,
+            'side': side,
+            'amount': amount,
+            'price': fill_price,
+            'filled': amount,
+            'status': 'closed',
+            'timestamp': int(time.time() * 1000)
+        }
+
+    def fetch_open_positions(self):
+        """PAPER TRADING: No real positions"""
+        return []
+
+    def cancel_order(self, order_id, symbol=None):
+        """PAPER TRADING: Simulate cancel"""
+        self.logger.info(f"[PAPER] Order cancel simulated: {order_id}")
+        return {'id': order_id, 'status': 'canceled'}
+
+    def fetch_balance(self):
+        """PAPER TRADING: Return starting equity as balance"""
+        return {
+            'USDT': {
+                'free': self.config.starting_equity,
+                'used': 0,
+                'total': self.config.starting_equity
+            }
+        }
 
 
 def create_exchange(config, logger):
