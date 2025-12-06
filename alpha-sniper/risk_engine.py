@@ -96,7 +96,10 @@ class RiskEngine:
         self.regime_update_interval = 3600  # 1 hour
 
         # Equity tracking
-        self.starting_equity = config.starting_equity
+        # In SIM mode: use config.starting_equity as baseline
+        # In LIVE mode: will be set to actual MEXC balance on first sync (session_start_equity)
+        self.starting_equity = config.starting_equity  # Config baseline (used only in SIM)
+        self.session_start_equity = None  # Actual MEXC balance at session start (LIVE only)
         self.current_equity = config.starting_equity
         self.daily_pnl = 0.0
         self.daily_reset_time = self._get_next_utc_midnight()
@@ -104,9 +107,11 @@ class RiskEngine:
         # Open positions
         self.open_positions = []
 
-        # Position tracking for daily loss
+        # Position tracking for daily loss and reporting
         self.closed_trades_today = []
         self.daily_loss_alert_sent = False  # Track if alert already sent today
+        self.signals_today = 0  # Track signals generated today
+        self.pumps_today = 0  # Track pump signals today
 
         self.logger.info(f"💰 RiskEngine initialized | Starting equity: ${self.starting_equity:.2f}")
 
@@ -123,6 +128,11 @@ class RiskEngine:
 
         old_equity = self.current_equity
         self.current_equity = new_equity
+
+        # First sync in LIVE mode: set session_start_equity
+        if self.session_start_equity is None and not self.config.sim_mode:
+            self.session_start_equity = new_equity
+            self.logger.info(f"💰 Session equity baseline set from MEXC: ${self.session_start_equity:.2f}")
 
         # Log equity changes (but not too frequently)
         equity_change_pct = ((new_equity - old_equity) / old_equity * 100) if old_equity > 0 else 0
@@ -601,6 +611,9 @@ class RiskEngine:
         }
         self.closed_trades_today.append(closed_trade)
 
+        # Persist to /var/run/alpha-sniper/trades_today.json
+        self._save_daily_trades()
+
         # Log to CSV
         try:
             helpers.log_trade_to_csv(closed_trade)
@@ -620,27 +633,29 @@ class RiskEngine:
             mode = "SIM" if self.config.sim_mode else "LIVE"
             self.logger.info(f"🌅 Daily reset | PnL today: ${self.daily_pnl:.2f}")
 
-            # Send enhanced daily summary
-            if self.closed_trades_today:
-                wins = sum(1 for t in self.closed_trades_today if t['pnl_usd'] > 0)
-                losses = sum(1 for t in self.closed_trades_today if t['pnl_usd'] <= 0)
-                try:
-                    if self.alert_mgr:
-                        # Use enhanced alert manager (it tracks stats automatically)
-                        self.alert_mgr.send_daily_summary(
-                            final_equity=self.current_equity,
-                            open_positions=len(self.open_positions)
-                        )
-                    else:
-                        # Fallback to simple notification
-                        self.telegram.send(
-                            f"📊 [{mode}] Daily Summary\n"
-                            f"PnL: ${self.daily_pnl:.2f}\n"
-                            f"Trades: {len(self.closed_trades_today)} (W:{wins} L:{losses})\n"
-                            f"Equity: ${self.current_equity:.2f}"
-                        )
-                except Exception as e:
-                    self.logger.warning(f"[TELEGRAM] Failed to send daily summary: {e}")
+            # Send enhanced daily summary if configured
+            if self.config.telegram_daily_report_enabled:
+                if self.closed_trades_today:
+                    wins = sum(1 for t in self.closed_trades_today if t['pnl_usd'] > 0)
+                    losses = sum(1 for t in self.closed_trades_today if t['pnl_usd'] <= 0)
+                    try:
+                        if self.alert_mgr:
+                            # Use enhanced alert manager with trades list
+                            self.alert_mgr.send_daily_summary(
+                                final_equity=self.current_equity,
+                                open_positions=len(self.open_positions),
+                                trades_list=self.closed_trades_today
+                            )
+                        else:
+                            # Fallback to simple notification
+                            self.telegram.send(
+                                f"📊 [{mode}] Daily Summary\n"
+                                f"PnL: ${self.daily_pnl:.2f}\n"
+                                f"Trades: {len(self.closed_trades_today)} (W:{wins} L:{losses})\n"
+                                f"Equity: ${self.current_equity:.2f}"
+                            )
+                    except Exception as e:
+                        self.logger.warning(f"[TELEGRAM] Failed to send daily summary: {e}")
 
             # Send daily reset notification (especially important if daily loss limit was hit)
             if self.daily_loss_alert_sent:
@@ -659,7 +674,12 @@ class RiskEngine:
             self.daily_pnl = 0.0
             self.closed_trades_today = []
             self.daily_loss_alert_sent = False  # Reset alert flag
+            self.signals_today = 0  # Reset signal counter
+            self.pumps_today = 0  # Reset pump counter
             self.daily_reset_time = self._get_next_utc_midnight()
+
+            # Clear daily trades file
+            self._save_daily_trades()
 
     def save_positions(self, filepath: str = 'positions.json'):
         """
@@ -674,3 +694,23 @@ class RiskEngine:
         self.open_positions = helpers.load_json(filepath, default=[])
         if self.open_positions:
             self.logger.info(f"📂 Loaded {len(self.open_positions)} open positions from {filepath}")
+
+    def _save_daily_trades(self):
+        """
+        Persist today's closed trades to /var/run/alpha-sniper/trades_today.json
+        This file is used for daily reporting and gets cleared at UTC midnight.
+        """
+        import os
+        import json
+
+        try:
+            # Ensure directory exists
+            os.makedirs('/var/run/alpha-sniper', exist_ok=True)
+
+            filepath = '/var/run/alpha-sniper/trades_today.json'
+
+            # Save trades with atomic write
+            helpers.save_json_atomic(filepath, self.closed_trades_today)
+
+        except Exception as e:
+            self.logger.warning(f"Failed to save daily trades to /var/run/alpha-sniper/trades_today.json: {e}")

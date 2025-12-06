@@ -54,8 +54,17 @@ class PumpEngine:
         if df_1h is None or len(df_1h) < 20:
             return None
 
-        # Pump-specific volume filter (stricter in pump-only mode)
-        min_volume = self.config.pump_min_24h_quote_volume if self.config.pump_only_mode else self.config.min_24h_quote_volume
+        # Pump-specific volume filter (varies by mode)
+        if self.config.pump_only_mode and self.config.pump_aggressive_mode:
+            # AGGRESSIVE PUMP MODE: Looser volume requirement
+            min_volume = self.config.pump_aggressive_min_24h_quote_volume
+        elif self.config.pump_only_mode:
+            # PUMP-ONLY MODE: Stricter volume requirement
+            min_volume = self.config.pump_min_24h_quote_volume
+        else:
+            # NORMAL MODE: Standard requirement
+            min_volume = self.config.min_24h_quote_volume
+
         if volume_24h < min_volume:
             return None
 
@@ -80,8 +89,34 @@ class PumpEngine:
         else:
             return_24h = 0
 
-        # Pump filters (stricter in pump-only mode)
-        if self.config.pump_only_mode:
+        # Pump filters (varies by mode)
+        if self.config.pump_only_mode and self.config.pump_aggressive_mode:
+            # AGGRESSIVE PUMP MODE: Looser filters for more signals
+            rvol_check = rvol >= self.config.pump_aggressive_min_rvol
+            momentum_check = momentum_1h >= 20  # Looser momentum requirement
+            return_check = self.config.pump_aggressive_min_24h_return <= return_24h <= self.config.pump_aggressive_max_24h_return
+
+            # Optional: Check RSI 5m if enabled
+            rsi_check = True
+            if hasattr(self.config, 'pump_aggressive_momentum_rsi_5m'):
+                df_5m = data.get('df_5m')
+                if df_5m is not None and len(df_5m) >= 15:
+                    rsi_5m = helpers.calculate_rsi(df_5m, 14).iloc[-1]
+                    rsi_check = rsi_5m >= self.config.pump_aggressive_momentum_rsi_5m
+
+            # Optional: Check price above EMA 1m
+            ema_check = True
+            if self.config.pump_aggressive_price_above_ema1m:
+                df_1m = data.get('df_1m')
+                if df_1m is not None and len(df_1m) >= 50:
+                    ema_50 = df_1m['close'].iloc[-50:].mean()
+                    ema_check = current_price > ema_50
+
+            # Combine all aggressive checks
+            if not (rsi_check and ema_check):
+                return None
+
+        elif self.config.pump_only_mode:
             # PUMP-ONLY MODE: Use stricter filters
             rvol_check = rvol >= self.config.pump_min_rvol
             momentum_check = momentum_1h >= self.config.pump_min_momentum_1h
@@ -152,8 +187,16 @@ class PumpEngine:
         tp_2r = current_price + (risk_per_unit * 1.5)
         tp_4r = current_price + (risk_per_unit * 3)
 
-        # Max hold hours (shorter in pump-only mode)
-        max_hold_hours = self.config.pump_max_hold_hours if self.config.pump_only_mode else 6
+        # Max hold hours (varies by mode)
+        if self.config.pump_only_mode and self.config.pump_aggressive_mode:
+            # AGGRESSIVE PUMP MODE: Very short hold time (minutes)
+            max_hold_hours = self.config.pump_aggressive_max_hold_minutes / 60.0
+        elif self.config.pump_only_mode:
+            # PUMP-ONLY MODE: Short hold time
+            max_hold_hours = self.config.pump_max_hold_hours
+        else:
+            # NORMAL MODE: Standard hold time
+            max_hold_hours = 6
 
         # Return signal
         return {

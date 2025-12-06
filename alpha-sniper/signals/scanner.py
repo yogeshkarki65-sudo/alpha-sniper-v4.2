@@ -84,7 +84,13 @@ class Scanner:
 
         # 5. Log results
         self.logger.info("")
-        if self.config.pump_only_mode:
+        if self.config.pump_only_mode and self.config.pump_aggressive_mode:
+            self.logger.info(
+                f"📡 Signals Generated [PUMP-AGGRESSIVE] | "
+                f"Pump: {len(pump_signals)} | "
+                f"TOTAL: {len(all_signals)}"
+            )
+        elif self.config.pump_only_mode:
             self.logger.info(
                 f"📡 Signals Generated [PUMP-ONLY] | "
                 f"Pump: {len(pump_signals)} | "

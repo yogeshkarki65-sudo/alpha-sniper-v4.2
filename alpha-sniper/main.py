@@ -85,6 +85,17 @@ class AlphaSniperBot:
         # Track if we've sent first equity sync notification
         self.first_equity_sync_notified = False
 
+        # Last scan time tracking (for drift detection and heartbeat)
+        self.last_scan_time = None
+        self.drift_alert_sent = False  # Track if we've already sent drift alert
+
+        # Fast mode tracking
+        self.fast_mode_start_time = None
+        if self.config.fast_mode_enabled:
+            self.fast_mode_start_time = time.time()
+            self.logger.info(f"⚡ FAST MODE ENABLED: {self.config.fast_scan_interval_seconds}s intervals")
+            self.logger.info(f"   Will auto-disable after {self.config.fast_mode_max_runtime_hours} hours")
+
         # Send enhanced startup notification
         sim_data_source = getattr(self.config, 'sim_data_source', 'FAKE')
         regime = self.risk_engine.current_regime if self.risk_engine.current_regime else 'UNKNOWN'
@@ -645,11 +656,17 @@ class AlphaSniperBot:
         - Scans universe for signals
         - Opens new positions
         - Runs DFE daily at 00:05 UTC
+        - Supports FAST_MODE with auto-disable
         """
         self.logger.info("🔄 SCAN LOOP started")
 
+        # Determine scan interval (fast mode or normal)
+        scan_interval = self.config.fast_scan_interval_seconds if self.config.fast_mode_enabled else self.config.scan_interval_seconds
+        self.logger.info(f"   Scan interval: {scan_interval}s")
+
         # Run first cycle immediately
         self.trading_cycle()
+        self.last_scan_time = time.time()  # Track scan time
 
         # Setup DFE scheduling if enabled
         if self.config.dfe_enabled:
@@ -665,10 +682,42 @@ class AlphaSniperBot:
                 current_time = time.time()
                 elapsed = current_time - last_scan_time
 
+                # Check if FAST_MODE should be auto-disabled
+                if self.config.fast_mode_enabled and self.fast_mode_start_time:
+                    fast_mode_runtime_hours = (current_time - self.fast_mode_start_time) / 3600
+
+                    if fast_mode_runtime_hours >= self.config.fast_mode_max_runtime_hours:
+                        # Disable fast mode
+                        self.logger.info(
+                            f"⚡ FAST MODE AUTO-DISABLED after {fast_mode_runtime_hours:.1f} hours "
+                            f"(max: {self.config.fast_mode_max_runtime_hours}h)"
+                        )
+
+                        # Switch to normal scan interval
+                        self.config.fast_mode_enabled = False
+                        scan_interval = self.config.scan_interval_seconds
+
+                        # Send Telegram notification
+                        try:
+                            mode = "SIM" if self.config.sim_mode else "LIVE"
+                            self.telegram.send(
+                                f"⚡ <b>[{mode}] FAST MODE DISABLED</b>\n"
+                                f"━━━━━━━━━━━━━━━━━━\n"
+                                f"<b>Runtime:</b> {fast_mode_runtime_hours:.1f}h\n"
+                                f"<b>Max allowed:</b> {self.config.fast_mode_max_runtime_hours}h\n"
+                                f"<b>New scan interval:</b> {scan_interval}s\n"
+                                f"\n📊 <i>Reverting to normal scan frequency</i>"
+                            )
+                            self.logger.info("[TELEGRAM] Fast mode auto-disable notification sent")
+                        except Exception as e:
+                            self.logger.warning(f"[TELEGRAM] Failed to send fast mode disable notification: {e}")
+
                 # Check if it's time to run next scan
-                if elapsed >= self.config.scan_interval_seconds:
+                if elapsed >= scan_interval:
                     self.trading_cycle()
                     last_scan_time = current_time
+                    self.last_scan_time = current_time  # Track for drift detection
+                    self.drift_alert_sent = False  # Reset drift alert when scan completes
 
                 # Check scheduled tasks (DFE)
                 schedule.run_pending()
@@ -718,6 +767,66 @@ class AlphaSniperBot:
                 self.logger.exception(e)
                 await asyncio.sleep(5)  # Back off on error
 
+    async def drift_detection_loop(self):
+        """
+        DRIFT DETECTION LOOP
+        - Runs every 60s
+        - Checks if scan loop has stalled
+        - Sends Telegram alert if drift detected
+        """
+        self.logger.info("🔍 DRIFT DETECTION started")
+
+        # Wait a bit before starting to avoid false positives on startup
+        await asyncio.sleep(120)  # 2 minutes grace period on startup
+
+        while self.running:
+            try:
+                current_time = time.time()
+
+                # Check if last_scan_time exists and is set
+                if self.last_scan_time is not None:
+                    elapsed_since_scan = current_time - self.last_scan_time
+
+                    # Calculate max allowed stall time: max(3 * scan_interval, 600s)
+                    max_stall_seconds = max(
+                        self.config.drift_max_stall_multiplier * self.config.scan_interval_seconds,
+                        600  # 10 minutes minimum
+                    )
+
+                    # Check if scan loop has stalled
+                    if elapsed_since_scan > max_stall_seconds:
+                        # Send alert only once per stall event
+                        if not self.drift_alert_sent:
+                            mode = "SIM" if self.config.sim_mode else "LIVE"
+                            self.logger.error(
+                                f"🚨 DRIFT DETECTED: Scan loop stalled! "
+                                f"Last scan: {elapsed_since_scan:.0f}s ago (max: {max_stall_seconds:.0f}s)"
+                            )
+
+                            # Send Telegram alert
+                            try:
+                                self.telegram.send(
+                                    f"⚠️ <b>[{mode}] DRIFT DETECTED</b>\n"
+                                    f"━━━━━━━━━━━━━━━━━━\n"
+                                    f"<b>Issue:</b> Scan loop stalled\n"
+                                    f"<b>Last scan:</b> {elapsed_since_scan:.0f}s ago\n"
+                                    f"<b>Max allowed:</b> {max_stall_seconds:.0f}s\n"
+                                    f"<b>Scan interval:</b> {self.config.scan_interval_seconds}s\n"
+                                    f"\n⚠️ <i>Bot may be hung or stuck in scan loop</i>"
+                                )
+                                self.logger.info("[TELEGRAM] Drift detection alert sent")
+                                self.drift_alert_sent = True
+                            except Exception as e:
+                                self.logger.warning(f"[TELEGRAM] Failed to send drift alert: {e}")
+
+                # Sleep for 60 seconds before next check
+                await asyncio.sleep(60)
+
+            except Exception as e:
+                self.logger.error(f"Error in drift_detection_loop: {e}")
+                self.logger.exception(e)
+                await asyncio.sleep(60)  # Continue checking even on error
+
     def run(self):
         """
         Main run loop - starts dual async loops (scan + position)
@@ -754,13 +863,20 @@ class AlphaSniperBot:
 
     async def _run_async(self):
         """
-        Run both scan_loop and position_loop concurrently
+        Run scan_loop, position_loop, and drift_detection concurrently
         """
         try:
-            await asyncio.gather(
+            tasks = [
                 self.scan_loop(),
                 self.position_loop()
-            )
+            ]
+
+            # Add drift detection if enabled
+            if self.config.drift_detection_enabled:
+                tasks.append(self.drift_detection_loop())
+
+            await asyncio.gather(*tasks)
+
         except asyncio.CancelledError:
             self.logger.info("Async loops cancelled")
         except Exception as e:

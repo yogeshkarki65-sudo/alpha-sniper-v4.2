@@ -113,6 +113,29 @@ class Config:
         self.pump_trail_atr_mult = float(get_env("PUMP_TRAIL_ATR_MULT", "1.2"))
         self.pump_trail_start_minutes = int(get_env("PUMP_TRAIL_START_MINUTES", "30"))
 
+        # === FAST MODE (scan every 30s for limited time) ===
+        self.fast_mode_enabled = self.parse_bool(get_env("FAST_MODE_ENABLED", "false"))
+        self.fast_scan_interval_seconds = int(get_env("FAST_SCAN_INTERVAL_SECONDS", "30"))
+        self.fast_mode_max_runtime_hours = int(get_env("FAST_MODE_MAX_RUNTIME_HOURS", "4"))
+
+        # === AGGRESSIVE PUMP MODE (looser filters for more signals) ===
+        self.pump_aggressive_mode = self.parse_bool(get_env("PUMP_AGGRESSIVE_MODE", "false"))
+        self.pump_aggressive_min_24h_return = float(get_env("PUMP_AGGRESSIVE_MIN_24H_RETURN", "0.30"))
+        self.pump_aggressive_max_24h_return = float(get_env("PUMP_AGGRESSIVE_MAX_24H_RETURN", "5.00"))
+        self.pump_aggressive_min_rvol = float(get_env("PUMP_AGGRESSIVE_MIN_RVOL", "1.8"))
+        self.pump_aggressive_min_24h_quote_volume = float(get_env("PUMP_AGGRESSIVE_MIN_24H_QUOTE_VOLUME", "500000"))
+        self.pump_aggressive_momentum_rsi_5m = int(get_env("PUMP_AGGRESSIVE_MOMENTUM_RSI_5M", "55"))
+        self.pump_aggressive_price_above_ema1m = self.parse_bool(get_env("PUMP_AGGRESSIVE_PRICE_ABOVE_EMA1M", "true"))
+        self.pump_aggressive_max_hold_minutes = int(get_env("PUMP_AGGRESSIVE_MAX_HOLD_MINUTES", "90"))
+
+        # === TELEGRAM ENHANCEMENTS ===
+        self.telegram_trade_screenshots_enabled = self.parse_bool(get_env("TELEGRAM_TRADE_SCREENSHOTS_ENABLED", "false"))
+        self.telegram_daily_report_enabled = self.parse_bool(get_env("TELEGRAM_DAILY_REPORT_ENABLED", "true"))
+
+        # === DRIFT DETECTION ===
+        self.drift_detection_enabled = self.parse_bool(get_env("DRIFT_DETECTION_ENABLED", "true"))
+        self.drift_max_stall_multiplier = int(get_env("DRIFT_MAX_STALL_MULTIPLIER", "3"))  # max(3 * scan_interval, 600s)
+
         if not self.sim_mode:
             if not self.mexc_api_key or not self.mexc_secret_key:
                 raise Exception("Live mode requires MEXC_API_KEY and MEXC_SECRET_KEY in the environment")

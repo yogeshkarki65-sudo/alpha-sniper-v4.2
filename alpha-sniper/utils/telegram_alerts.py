@@ -241,13 +241,14 @@ class TelegramAlertManager:
         elif pnl_usd < 0:
             self.daily_losses += 1
 
-    def send_daily_summary(self, final_equity: float, open_positions: int):
+    def send_daily_summary(self, final_equity: float, open_positions: int, trades_list: list = None):
         """
-        Send daily trading summary
+        Send daily trading summary with best/worst trades
 
         Args:
             final_equity: Ending equity for the day
             open_positions: Number of open positions
+            trades_list: List of trade dictionaries from closed_trades_today (optional)
         """
         # Calculate daily P&L
         day_pnl_pct = ((final_equity - self.day_start_equity) / self.day_start_equity * 100) if self.day_start_equity > 0 else 0
@@ -275,8 +276,24 @@ class TelegramAlertManager:
             f"<b>Max Drawdown:</b> {self.daily_max_drawdown:.2f}%\n"
             f"<b>Final Equity:</b> ${final_equity:.2f}\n"
             f"<b>Open Positions:</b> {open_positions}\n"
-            f"<b>Time:</b> {datetime.now(timezone.utc).strftime('%H:%M:%S UTC')}\n"
         )
+
+        # Add best/worst trades if available
+        if trades_list and len(trades_list) > 0:
+            best_trade = max(trades_list, key=lambda t: t.get('pnl_usd', 0))
+            worst_trade = min(trades_list, key=lambda t: t.get('pnl_usd', 0))
+
+            best_pnl = best_trade.get('pnl_usd', 0)
+            worst_pnl = worst_trade.get('pnl_usd', 0)
+            best_symbol = best_trade.get('symbol', 'UNKNOWN')
+            worst_symbol = worst_trade.get('symbol', 'UNKNOWN')
+
+            msg += (
+                f"<b>Best Trade:</b> {best_symbol} ${best_pnl:+.2f}\n"
+                f"<b>Worst Trade:</b> {worst_symbol} ${worst_pnl:+.2f}\n"
+            )
+
+        msg += f"<b>Time:</b> {datetime.now(timezone.utc).strftime('%H:%M:%S UTC')}\n"
 
         self.telegram.send(msg)
         self.logger.info(f"[TELEGRAM] Daily summary sent: {self.daily_trades} trades, ${self.daily_pnl:+.2f}")

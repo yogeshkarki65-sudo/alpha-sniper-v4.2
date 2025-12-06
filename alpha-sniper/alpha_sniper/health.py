@@ -162,12 +162,22 @@ def start_heartbeat_updater(bot_instance, interval: int = 30):
                 is_running = getattr(bot_instance, 'running', False)
                 risk_engine = getattr(bot_instance, 'risk_engine', None)
 
+                # Get last scan time (ISO format)
+                last_scan_time = None
+                if hasattr(bot_instance, 'last_scan_time') and bot_instance.last_scan_time:
+                    last_scan_time = datetime.fromtimestamp(bot_instance.last_scan_time).isoformat()
+
                 heartbeat_data = {
                     "timestamp": datetime.utcnow().isoformat(),
                     "status": "running" if is_running else "stopped",
                     "pid": os.getpid(),
                     "open_positions": len(risk_engine.open_positions) if risk_engine else 0,
-                    "equity": float(risk_engine.current_equity) if risk_engine else 0.0
+                    "equity": float(risk_engine.current_equity) if risk_engine else 0.0,
+                    "session_start_equity": float(risk_engine.session_start_equity) if risk_engine and risk_engine.session_start_equity else float(risk_engine.current_equity) if risk_engine else 0.0,
+                    "session_pnl_pct": float(((risk_engine.current_equity - risk_engine.session_start_equity) / risk_engine.session_start_equity * 100) if risk_engine and risk_engine.session_start_equity and risk_engine.session_start_equity > 0 else 0.0),
+                    "signals_today": int(risk_engine.signals_today) if risk_engine and hasattr(risk_engine, 'signals_today') else 0,
+                    "pumps_today": int(risk_engine.pumps_today) if risk_engine and hasattr(risk_engine, 'pumps_today') else 0,
+                    "last_scan_time": last_scan_time
                 }
 
                 # Atomic write
