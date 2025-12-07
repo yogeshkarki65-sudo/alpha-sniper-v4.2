@@ -28,19 +28,61 @@ class PumpEngine:
         if not self.config.pump_engine_enabled:
             return signals
 
+        # Debug counters
+        debug_stats = {
+            'raw_candidates': 0,
+            'after_data_validation': 0,
+            'after_volume_filter': 0,
+            'after_spread_filter': 0,
+            'after_rsi_ema_check': 0,
+            'after_score_filter': 0,
+            'after_core_conditions': 0,
+            'final_signals': 0,
+            'rejection_details': []
+        }
+
         for symbol, data in market_data.items():
+            debug_stats['raw_candidates'] += 1
             try:
-                signal = self._evaluate_symbol(symbol, data, regime)
+                signal, rejection_reason = self._evaluate_symbol(symbol, data, regime, debug_stats)
                 if signal:
                     signals.append(signal)
+                    debug_stats['final_signals'] += 1
+                elif self.config.pump_debug_logging and rejection_reason:
+                    # Store rejection details for top candidates (limit to 20)
+                    if len(debug_stats['rejection_details']) < 20:
+                        debug_stats['rejection_details'].append({
+                            'symbol': symbol,
+                            'reason': rejection_reason
+                        })
             except Exception as e:
                 self.logger.debug(f"Error evaluating {symbol} for pump: {e}")
 
+        # Debug summary
+        if self.config.pump_debug_logging:
+            self.logger.info(f"[PUMP_DEBUG] Scan Summary:")
+            self.logger.info(f"  Raw candidates: {debug_stats['raw_candidates']}")
+            self.logger.info(f"  After data validation: {debug_stats['after_data_validation']}")
+            self.logger.info(f"  After volume filter: {debug_stats['after_volume_filter']}")
+            self.logger.info(f"  After spread filter: {debug_stats['after_spread_filter']}")
+            self.logger.info(f"  After RSI/EMA check: {debug_stats['after_rsi_ema_check']}")
+            self.logger.info(f"  After score filter: {debug_stats['after_score_filter']}")
+            self.logger.info(f"  After core conditions: {debug_stats['after_core_conditions']}")
+            self.logger.info(f"  Final signals: {debug_stats['final_signals']}")
+
+            if debug_stats['rejection_details']:
+                self.logger.info(f"\n[PUMP_DEBUG] Sample Rejection Reasons (first 20):")
+                for detail in debug_stats['rejection_details']:
+                    self.logger.info(f"  {detail['symbol']}: {detail['reason']}")
+
         return signals
 
-    def _evaluate_symbol(self, symbol: str, data: dict, regime: str) -> dict:
+    def _evaluate_symbol(self, symbol: str, data: dict, regime: str, debug_stats: dict = None) -> tuple:
         """
         Evaluate a single symbol for pump entry
+
+        Returns:
+            tuple: (signal_dict or None, rejection_reason or None)
         """
         # Get data
         ticker = data.get('ticker')
@@ -50,9 +92,12 @@ class PumpEngine:
         spread_pct = data.get('spread_pct', 999)
 
         if df_15m is None or len(df_15m) < 20:
-            return None
+            return (None, "INSUFFICIENT_DATA_15m")
         if df_1h is None or len(df_1h) < 20:
-            return None
+            return (None, "INSUFFICIENT_DATA_1h")
+
+        if debug_stats is not None:
+            debug_stats['after_data_validation'] += 1
 
         # Pump-specific volume filter (varies by mode)
         if self.config.pump_only_mode and self.config.pump_aggressive_mode:
@@ -66,11 +111,21 @@ class PumpEngine:
             min_volume = self.config.min_24h_quote_volume
 
         if volume_24h < min_volume:
-            return None
+            if self.config.pump_debug_logging:
+                self.logger.debug(f"[PUMP_DEBUG] {symbol}: VOLUME_TOO_LOW (24h vol: ${volume_24h:,.0f} < ${min_volume:,.0f})")
+            return (None, f"VOLUME_TOO_LOW (${volume_24h:,.0f} < ${min_volume:,.0f})")
+
+        if debug_stats is not None:
+            debug_stats['after_volume_filter'] += 1
 
         # Pump spread filter (slightly looser than standard)
         if spread_pct > 1.5:
-            return None
+            if self.config.pump_debug_logging:
+                self.logger.debug(f"[PUMP_DEBUG] {symbol}: SPREAD_TOO_WIDE ({spread_pct:.2f}% > 1.5%)")
+            return (None, f"SPREAD_TOO_WIDE ({spread_pct:.2f}% > 1.5%)")
+
+        if debug_stats is not None:
+            debug_stats['after_spread_filter'] += 1
 
         # Current price
         current_price = df_15m['close'].iloc[-1]
@@ -114,7 +169,17 @@ class PumpEngine:
 
             # Combine all aggressive checks
             if not (rsi_check and ema_check):
-                return None
+                if self.config.pump_debug_logging:
+                    failed_checks = []
+                    if not rsi_check:
+                        failed_checks.append("RSI_5m_TOO_LOW")
+                    if not ema_check:
+                        failed_checks.append("PRICE_BELOW_EMA1m")
+                    self.logger.debug(f"[PUMP_DEBUG] {symbol}: AGGRESSIVE_CHECKS_FAILED ({', '.join(failed_checks)})")
+                return (None, f"AGGRESSIVE_CHECKS_FAILED ({'RSI' if not rsi_check else 'EMA'})")
+
+        if debug_stats is not None:
+            debug_stats['after_rsi_ema_check'] += 1
 
         elif self.config.pump_only_mode:
             # PUMP-ONLY MODE: Use stricter filters
@@ -126,6 +191,10 @@ class PumpEngine:
             rvol_check = rvol >= 2.0
             momentum_check = momentum_1h >= 25
             return_check = 30 <= return_24h <= 400  # Not too early, not too late
+
+        # For non-aggressive modes, update RSI/EMA counter (they don't have that check)
+        if debug_stats is not None and not (self.config.pump_only_mode and self.config.pump_aggressive_mode):
+            debug_stats['after_rsi_ema_check'] += 1
 
         # Calculate score
         score = 0
@@ -160,11 +229,28 @@ class PumpEngine:
         # Check minimum score (stricter in pump-only mode)
         min_score = self.config.pump_min_score if self.config.pump_only_mode else 70
         if score < min_score:
-            return None
+            if self.config.pump_debug_logging:
+                self.logger.debug(f"[PUMP_DEBUG] {symbol}: SCORE_TOO_LOW (score: {score} < min: {min_score}, rvol: {rvol:.2f}, momentum: {momentum_1h:.1f}, return_24h: {return_24h:.1f}%)")
+            return (None, f"SCORE_TOO_LOW ({score} < {min_score})")
+
+        if debug_stats is not None:
+            debug_stats['after_score_filter'] += 1
 
         # Check all core conditions
         if not (rvol_check and momentum_check and return_check):
-            return None
+            if self.config.pump_debug_logging:
+                failed_conditions = []
+                if not rvol_check:
+                    failed_conditions.append(f"RVOL:{rvol:.2f}")
+                if not momentum_check:
+                    failed_conditions.append(f"MOMENTUM:{momentum_1h:.1f}")
+                if not return_check:
+                    failed_conditions.append(f"RETURN_24H:{return_24h:.1f}%")
+                self.logger.debug(f"[PUMP_DEBUG] {symbol}: CORE_CONDITIONS_FAILED ({', '.join(failed_conditions)})")
+            return (None, f"CORE_CONDITIONS_FAILED")
+
+        if debug_stats is not None:
+            debug_stats['after_core_conditions'] += 1
 
         # Calculate stop loss (tighter for pumps)
         atr_15m = helpers.calculate_atr(df_15m, 14).iloc[-1]
@@ -198,8 +284,12 @@ class PumpEngine:
             # NORMAL MODE: Standard hold time
             max_hold_hours = 6
 
+        # Log successful signal if debug enabled
+        if self.config.pump_debug_logging:
+            self.logger.info(f"[PUMP_DEBUG] {symbol}: ✅ SIGNAL_GENERATED (score: {score}, rvol: {rvol:.2f}, momentum: {momentum_1h:.1f}, return_24h: {return_24h:.1f}%, vol: ${volume_24h:,.0f})")
+
         # Return signal
-        return {
+        return ({
             'symbol': symbol,
             'side': 'long',
             'engine': 'pump',
@@ -214,4 +304,4 @@ class PumpEngine:
             'volume_24h': volume_24h,
             'max_hold_hours': max_hold_hours,
             'regime': regime
-        }
+        }, None)

@@ -128,6 +128,9 @@ class Config:
         self.pump_aggressive_price_above_ema1m = self.parse_bool(get_env("PUMP_AGGRESSIVE_PRICE_ABOVE_EMA1M", "true"))
         self.pump_aggressive_max_hold_minutes = int(get_env("PUMP_AGGRESSIVE_MAX_HOLD_MINUTES", "90"))
 
+        # === PUMP DEBUG LOGGING ===
+        self.pump_debug_logging = self.parse_bool(get_env("PUMP_DEBUG_LOGGING", "false"))
+
         # === TELEGRAM ENHANCEMENTS ===
         self.telegram_trade_screenshots_enabled = self.parse_bool(get_env("TELEGRAM_TRADE_SCREENSHOTS_ENABLED", "false"))
         self.telegram_daily_report_enabled = self.parse_bool(get_env("TELEGRAM_DAILY_REPORT_ENABLED", "true"))
