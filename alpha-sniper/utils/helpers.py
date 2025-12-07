@@ -76,11 +76,29 @@ def calculate_momentum(df: pd.DataFrame, periods: int) -> float:
 def save_json_atomic(filepath: str, data: Any):
     """
     Atomically save JSON data (write to temp, then rename)
+    Creates parent directory if it doesn't exist.
+    Raises PermissionError if write fails due to permissions.
     """
+    # Ensure parent directory exists
+    parent_dir = os.path.dirname(filepath)
+    if parent_dir:
+        os.makedirs(parent_dir, exist_ok=True)
+
+    # Write to temp file in same directory, then atomic rename
     temp_path = filepath + '.tmp'
-    with open(temp_path, 'w') as f:
-        json.dump(data, f, indent=2)
-    os.replace(temp_path, filepath)
+    try:
+        with open(temp_path, 'w') as f:
+            json.dump(data, f, indent=2)
+        os.replace(temp_path, filepath)
+    except PermissionError as e:
+        # Clean up temp file if it exists
+        try:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+        except:
+            pass
+        # Re-raise PermissionError for caller to handle
+        raise PermissionError(f"Permission denied writing to {filepath}: {e}") from e
 
 
 def load_json(filepath: str, default: Any = None) -> Any:

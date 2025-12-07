@@ -684,8 +684,24 @@ class RiskEngine:
     def save_positions(self, filepath: str = 'positions.json'):
         """
         Save open positions to JSON
+        Handles PermissionError gracefully - logs warning but doesn't crash
         """
-        helpers.save_json_atomic(filepath, self.open_positions)
+        try:
+            helpers.save_json_atomic(filepath, self.open_positions)
+        except PermissionError as e:
+            self.logger.error(f"❌ Permission error writing positions file at {filepath}: {e}")
+            self.logger.error("Bot will continue but positions may not persist across restarts")
+            # Optionally send Telegram alert (rate-limited)
+            if hasattr(self, 'telegram') and self.telegram:
+                try:
+                    self.telegram.send_message(
+                        f"⚠️ Permission error writing positions file:\n{filepath}\n\n"
+                        f"Bot continues but positions may not persist."
+                    )
+                except:
+                    pass
+        except Exception as e:
+            self.logger.warning(f"Failed to save positions to {filepath}: {e}")
 
     def load_positions(self, filepath: str = 'positions.json'):
         """

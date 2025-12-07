@@ -19,7 +19,10 @@ class PumpEngine:
         self.config = config
         self.logger = logger
 
-    def generate_signals(self, market_data: dict, regime: str) -> list:
+        # Pump debug toggle
+        self.debug_enabled = getattr(config, "pump_debug_logging", False)
+
+    def generate_signals(self, market_data: dict, regime: str, open_positions=None) -> list:
         """
         Generate pump signals from market data
         """
@@ -28,76 +31,101 @@ class PumpEngine:
         if not self.config.pump_engine_enabled:
             return signals
 
-        # Debug counters
-        debug_stats = {
-            'raw_candidates': 0,
-            'after_data_validation': 0,
-            'after_volume_filter': 0,
-            'after_spread_filter': 0,
-            'after_rsi_ema_check': 0,
-            'after_score_filter': 0,
-            'after_core_conditions': 0,
-            'final_signals': 0,
-            'rejection_details': []
-        }
+        # Filter valid symbols (exclude leveraged tokens and perps)
+        quote = "USDT"
+        valid_symbols = [
+            s for s in market_data.keys()
+            if s.endswith(quote)
+            and not s.endswith("3L" + quote)
+            and not s.endswith("3S" + quote)
+            and "_PERP" not in s
+        ]
 
-        for symbol, data in market_data.items():
-            debug_stats['raw_candidates'] += 1
+        # Debug counters
+        debug_counts = None
+        debug_rejections = None
+
+        if self.debug_enabled:
+            debug_counts = {
+                "raw": len(valid_symbols),
+                "after_data": 0,
+                "after_volume": 0,
+                "after_spread": 0,
+                "after_score": 0,
+                "after_core": 0,
+            }
+            debug_rejections = []
+
+        for symbol in valid_symbols:
             try:
-                signal, rejection_reason = self._evaluate_symbol(symbol, data, regime, debug_stats)
-                if signal:
-                    signals.append(signal)
-                    debug_stats['final_signals'] += 1
-                elif self.config.pump_debug_logging and rejection_reason:
-                    # Store rejection details for top candidates (limit to 20)
-                    if len(debug_stats['rejection_details']) < 20:
-                        debug_stats['rejection_details'].append({
-                            'symbol': symbol,
-                            'reason': rejection_reason
-                        })
+                result = self._evaluate_symbol(
+                    symbol,
+                    market_data.get(symbol),
+                    regime,
+                    open_positions,
+                    debug_counts=debug_counts,
+                    debug_rejections=debug_rejections,
+                )
+                if result is not None:
+                    signals.append(result)
             except Exception as e:
                 self.logger.debug(f"Error evaluating {symbol} for pump: {e}")
 
         # Debug summary
-        if self.config.pump_debug_logging:
-            self.logger.info(f"[PUMP_DEBUG] Scan Summary:")
-            self.logger.info(f"  Raw candidates: {debug_stats['raw_candidates']}")
-            self.logger.info(f"  After data validation: {debug_stats['after_data_validation']}")
-            self.logger.info(f"  After volume filter: {debug_stats['after_volume_filter']}")
-            self.logger.info(f"  After spread filter: {debug_stats['after_spread_filter']}")
-            self.logger.info(f"  After RSI/EMA check: {debug_stats['after_rsi_ema_check']}")
-            self.logger.info(f"  After score filter: {debug_stats['after_score_filter']}")
-            self.logger.info(f"  After core conditions: {debug_stats['after_core_conditions']}")
-            self.logger.info(f"  Final signals: {debug_stats['final_signals']}")
+        if self.debug_enabled and debug_counts is not None:
+            self.logger.info(
+                "[PUMP_DEBUG] Scan Summary: raw=%d, after_data=%d, after_volume=%d, "
+                "after_spread=%d, after_score=%d, after_core=%d, final_signals=%d",
+                debug_counts["raw"],
+                debug_counts["after_data"],
+                debug_counts["after_volume"],
+                debug_counts["after_spread"],
+                debug_counts["after_score"],
+                debug_counts["after_core"],
+                len(signals),
+            )
 
-            if debug_stats['rejection_details']:
-                self.logger.info(f"\n[PUMP_DEBUG] Sample Rejection Reasons (first 20):")
-                for detail in debug_stats['rejection_details']:
-                    self.logger.info(f"  {detail['symbol']}: {detail['reason']}")
+            if debug_rejections:
+                self.logger.info("[PUMP_DEBUG] Sample rejections (first %d):", min(len(debug_rejections), 20))
+                for msg in debug_rejections[:20]:
+                    self.logger.info("[PUMP_DEBUG]   %s", msg)
 
         return signals
 
-    def _evaluate_symbol(self, symbol: str, data: dict, regime: str, debug_stats: dict = None) -> tuple:
+    def _evaluate_symbol(
+        self,
+        symbol: str,
+        data: dict,
+        regime: str,
+        open_positions,
+        debug_counts=None,
+        debug_rejections=None,
+    ):
         """
         Evaluate a single symbol for pump entry
 
         Returns:
-            tuple: (signal_dict or None, rejection_reason or None)
+            signal dict or None
         """
         # Get data
-        ticker = data.get('ticker')
-        df_15m = data.get('df_15m')
-        df_1h = data.get('df_1h')
+        ticker = data.get('ticker') if data else None
+        df_15m = data.get('df_15m') if data else None
+        df_1h = data.get('df_1h') if data else None
         volume_24h = ticker.get('quoteVolume', 0) if ticker else 0
-        spread_pct = data.get('spread_pct', 999)
+        spread_pct = data.get('spread_pct', 999) if data else 999
 
+        # Data validation
         if df_15m is None or len(df_15m) < 20:
-            return (None, "INSUFFICIENT_DATA_15m")
+            if debug_rejections is not None:
+                debug_rejections.append(f"{symbol}: INSUFFICIENT_DATA (15m)")
+            return None
         if df_1h is None or len(df_1h) < 20:
-            return (None, "INSUFFICIENT_DATA_1h")
+            if debug_rejections is not None:
+                debug_rejections.append(f"{symbol}: INSUFFICIENT_DATA (1h)")
+            return None
 
-        if debug_stats is not None:
-            debug_stats['after_data_validation'] += 1
+        if debug_counts is not None:
+            debug_counts["after_data"] += 1
 
         # Pump-specific volume filter (varies by mode)
         if self.config.pump_only_mode and self.config.pump_aggressive_mode:
@@ -111,21 +139,26 @@ class PumpEngine:
             min_volume = self.config.min_24h_quote_volume
 
         if volume_24h < min_volume:
-            if self.config.pump_debug_logging:
-                self.logger.debug(f"[PUMP_DEBUG] {symbol}: VOLUME_TOO_LOW (24h vol: ${volume_24h:,.0f} < ${min_volume:,.0f})")
-            return (None, f"VOLUME_TOO_LOW (${volume_24h:,.0f} < ${min_volume:,.0f})")
+            if debug_rejections is not None:
+                debug_rejections.append(
+                    f"{symbol}: VOLUME_TOO_LOW (24h=${volume_24h:,.0f} < min=${min_volume:,.0f})"
+                )
+            return None
 
-        if debug_stats is not None:
-            debug_stats['after_volume_filter'] += 1
+        if debug_counts is not None:
+            debug_counts["after_volume"] += 1
 
         # Pump spread filter (slightly looser than standard)
-        if spread_pct > 1.5:
-            if self.config.pump_debug_logging:
-                self.logger.debug(f"[PUMP_DEBUG] {symbol}: SPREAD_TOO_WIDE ({spread_pct:.2f}% > 1.5%)")
-            return (None, f"SPREAD_TOO_WIDE ({spread_pct:.2f}% > 1.5%)")
+        max_spread_pct = 1.5
+        if spread_pct > max_spread_pct:
+            if debug_rejections is not None:
+                debug_rejections.append(
+                    f"{symbol}: SPREAD_TOO_WIDE ({spread_pct:.2f}% > {max_spread_pct:.2f}%)"
+                )
+            return None
 
-        if debug_stats is not None:
-            debug_stats['after_spread_filter'] += 1
+        if debug_counts is not None:
+            debug_counts["after_spread"] += 1
 
         # Current price
         current_price = df_15m['close'].iloc[-1]
@@ -169,17 +202,16 @@ class PumpEngine:
 
             # Combine all aggressive checks
             if not (rsi_check and ema_check):
-                if self.config.pump_debug_logging:
-                    failed_checks = []
+                if debug_rejections is not None:
+                    failed = []
                     if not rsi_check:
-                        failed_checks.append("RSI_5m_TOO_LOW")
+                        failed.append("RSI_5m_TOO_LOW")
                     if not ema_check:
-                        failed_checks.append("PRICE_BELOW_EMA1m")
-                    self.logger.debug(f"[PUMP_DEBUG] {symbol}: AGGRESSIVE_CHECKS_FAILED ({', '.join(failed_checks)})")
-                return (None, f"AGGRESSIVE_CHECKS_FAILED ({'RSI' if not rsi_check else 'EMA'})")
-
-        if debug_stats is not None:
-            debug_stats['after_rsi_ema_check'] += 1
+                        failed.append("PRICE_BELOW_EMA1m")
+                    debug_rejections.append(
+                        f"{symbol}: AGGRESSIVE_CHECKS_FAILED ({', '.join(failed)})"
+                    )
+                return None
 
         elif self.config.pump_only_mode:
             # PUMP-ONLY MODE: Use stricter filters
@@ -191,10 +223,6 @@ class PumpEngine:
             rvol_check = rvol >= 2.0
             momentum_check = momentum_1h >= 25
             return_check = 30 <= return_24h <= 400  # Not too early, not too late
-
-        # For non-aggressive modes, update RSI/EMA counter (they don't have that check)
-        if debug_stats is not None and not (self.config.pump_only_mode and self.config.pump_aggressive_mode):
-            debug_stats['after_rsi_ema_check'] += 1
 
         # Calculate score
         score = 0
@@ -229,28 +257,33 @@ class PumpEngine:
         # Check minimum score (stricter in pump-only mode)
         min_score = self.config.pump_min_score if self.config.pump_only_mode else 70
         if score < min_score:
-            if self.config.pump_debug_logging:
-                self.logger.debug(f"[PUMP_DEBUG] {symbol}: SCORE_TOO_LOW (score: {score} < min: {min_score}, rvol: {rvol:.2f}, momentum: {momentum_1h:.1f}, return_24h: {return_24h:.1f}%)")
-            return (None, f"SCORE_TOO_LOW ({score} < {min_score})")
+            if debug_rejections is not None:
+                debug_rejections.append(
+                    f"{symbol}: SCORE_TOO_LOW (score={score:.1f} < min={min_score}, "
+                    f"rvol={rvol:.2f}, mom={momentum_1h:.1f}, ret_24h={return_24h:.1f}%)"
+                )
+            return None
 
-        if debug_stats is not None:
-            debug_stats['after_score_filter'] += 1
+        if debug_counts is not None:
+            debug_counts["after_score"] += 1
 
         # Check all core conditions
         if not (rvol_check and momentum_check and return_check):
-            if self.config.pump_debug_logging:
-                failed_conditions = []
+            if debug_rejections is not None:
+                failed = []
                 if not rvol_check:
-                    failed_conditions.append(f"RVOL:{rvol:.2f}")
+                    failed.append("RVOL_TOO_LOW")
                 if not momentum_check:
-                    failed_conditions.append(f"MOMENTUM:{momentum_1h:.1f}")
+                    failed.append("MOMENTUM_TOO_WEAK")
                 if not return_check:
-                    failed_conditions.append(f"RETURN_24H:{return_24h:.1f}%")
-                self.logger.debug(f"[PUMP_DEBUG] {symbol}: CORE_CONDITIONS_FAILED ({', '.join(failed_conditions)})")
-            return (None, f"CORE_CONDITIONS_FAILED")
+                    failed.append("RETURN_24H_OUT_OF_RANGE")
+                debug_rejections.append(
+                    f"{symbol}: CORE_CONDITIONS_FAILED ({', '.join(failed)})"
+                )
+            return None
 
-        if debug_stats is not None:
-            debug_stats['after_core_conditions'] += 1
+        if debug_counts is not None:
+            debug_counts["after_core"] += 1
 
         # Calculate stop loss (tighter for pumps)
         atr_15m = helpers.calculate_atr(df_15m, 14).iloc[-1]
@@ -284,12 +317,8 @@ class PumpEngine:
             # NORMAL MODE: Standard hold time
             max_hold_hours = 6
 
-        # Log successful signal if debug enabled
-        if self.config.pump_debug_logging:
-            self.logger.info(f"[PUMP_DEBUG] {symbol}: ✅ SIGNAL_GENERATED (score: {score}, rvol: {rvol:.2f}, momentum: {momentum_1h:.1f}, return_24h: {return_24h:.1f}%, vol: ${volume_24h:,.0f})")
-
-        # Return signal
-        return ({
+        # Create signal dict
+        signal = {
             'symbol': symbol,
             'side': 'long',
             'engine': 'pump',
@@ -304,4 +333,18 @@ class PumpEngine:
             'volume_24h': volume_24h,
             'max_hold_hours': max_hold_hours,
             'regime': regime
-        }, None)
+        }
+
+        # Log successful signal if debug enabled
+        if self.debug_enabled:
+            self.logger.info(
+                "[PUMP_DEBUG] %s: ✅ SIGNAL (score=%.1f, rvol=%.2f, mom=%.1f, ret_24h=%.1f%%, vol_24h=$%,.0f)",
+                symbol,
+                score,
+                rvol,
+                momentum_1h,
+                return_24h,
+                volume_24h,
+            )
+
+        return signal

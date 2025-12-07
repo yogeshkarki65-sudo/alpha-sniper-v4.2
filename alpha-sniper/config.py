@@ -131,6 +131,9 @@ class Config:
         # === PUMP DEBUG LOGGING ===
         self.pump_debug_logging = self.parse_bool(get_env("PUMP_DEBUG_LOGGING", "false"))
 
+        # === POSITIONS FILE PATH ===
+        self.positions_file_path = get_env("POSITIONS_FILE_PATH", "/var/lib/alpha-sniper/positions.json")
+
         # === TELEGRAM ENHANCEMENTS ===
         self.telegram_trade_screenshots_enabled = self.parse_bool(get_env("TELEGRAM_TRADE_SCREENSHOTS_ENABLED", "false"))
         self.telegram_daily_report_enabled = self.parse_bool(get_env("TELEGRAM_DAILY_REPORT_ENABLED", "true"))

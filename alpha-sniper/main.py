@@ -113,7 +113,7 @@ class AlphaSniperBot:
         )
 
         # Load existing positions
-        self.risk_engine.load_positions('positions.json')
+        self.risk_engine.load_positions(self.config.positions_file_path)
 
         # Running flag
         self.running = True
@@ -187,7 +187,7 @@ class AlphaSniperBot:
                 self.logger.info("📊 No signals to process")
 
             # 6. Save positions
-            self.risk_engine.save_positions('positions.json')
+            self.risk_engine.save_positions(self.config.positions_file_path)
 
             # 7. Log summary
             self._log_cycle_summary()
@@ -757,7 +757,7 @@ class AlphaSniperBot:
 
                 # Save positions after any fast stop triggers or Entry-DETE openings
                 if self.risk_engine.open_positions:
-                    self.risk_engine.save_positions('positions.json')
+                    self.risk_engine.save_positions(self.config.positions_file_path)
 
                 # Sleep until next check
                 await asyncio.sleep(self.config.position_check_interval_seconds)
@@ -891,7 +891,7 @@ class AlphaSniperBot:
         self.logger.info("🛑 Shutting down...")
 
         # Save final positions
-        self.risk_engine.save_positions('positions.json')
+        self.risk_engine.save_positions(self.config.positions_file_path)
 
         # Send shutdown notification
         if not self.config.sim_mode:
