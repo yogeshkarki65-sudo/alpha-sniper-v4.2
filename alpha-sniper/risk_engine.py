@@ -681,10 +681,13 @@ class RiskEngine:
             # Clear daily trades file
             self._save_daily_trades()
 
-    def save_positions(self, filepath: str = 'positions.json'):
+    def save_positions(self, filepath: str):
         """
         Save open positions to JSON
         Handles PermissionError gracefully - logs warning but doesn't crash
+
+        Args:
+            filepath: Full path to positions file (from config.positions_file_path)
         """
         try:
             helpers.save_json_atomic(filepath, self.open_positions)
@@ -703,9 +706,12 @@ class RiskEngine:
         except Exception as e:
             self.logger.warning(f"Failed to save positions to {filepath}: {e}")
 
-    def load_positions(self, filepath: str = 'positions.json'):
+    def load_positions(self, filepath: str):
         """
         Load open positions from JSON
+
+        Args:
+            filepath: Full path to positions file (from config.positions_file_path)
         """
         self.open_positions = helpers.load_json(filepath, default=[])
         if self.open_positions:
