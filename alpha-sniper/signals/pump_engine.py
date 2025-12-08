@@ -19,8 +19,12 @@ class PumpEngine:
         self.config = config
         self.logger = logger
 
-        # Pump debug toggle
-        self.debug_enabled = getattr(config, "pump_debug_logging", False)
+        # Pump debug toggle - directly access config attribute
+        self.debug_enabled = config.pump_debug_logging if hasattr(config, 'pump_debug_logging') else False
+
+        # Log debug status on initialization
+        if self.debug_enabled:
+            self.logger.info("[PUMP_DEBUG] Debug logging ENABLED for pump engine")
 
     def generate_signals(self, market_data: dict, regime: str, open_positions=None) -> list:
         """
