@@ -713,7 +713,30 @@ class RiskEngine:
         Args:
             filepath: Full path to positions file (from config.positions_file_path)
         """
+        import os
+
+        # Try to load positions
         self.open_positions = helpers.load_json(filepath, default=[])
+
+        # Detect permission issues: file exists but we got default (empty list)
+        if not self.open_positions and os.path.exists(filepath):
+            try:
+                # Try to read file to check permissions
+                with open(filepath, 'r') as f:
+                    pass
+            except PermissionError:
+                self.logger.error(f"❌ Permission error reading positions file at {filepath}")
+                self.logger.error("Fix with: sudo chown alpha-sniper:alpha-sniper <filepath>")
+                # Send Telegram alert
+                if hasattr(self, 'telegram') and self.telegram:
+                    try:
+                        self.telegram.send_message(
+                            f"⚠️ Permission error reading positions file:\n{filepath}\n\n"
+                            f"Bot will start without previous positions."
+                        )
+                    except:
+                        pass
+
         if self.open_positions:
             self.logger.info(f"📂 Loaded {len(self.open_positions)} open positions from {filepath}")
 

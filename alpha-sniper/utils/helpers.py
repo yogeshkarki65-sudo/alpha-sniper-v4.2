@@ -104,6 +104,7 @@ def save_json_atomic(filepath: str, data: Any):
 def load_json(filepath: str, default: Any = None) -> Any:
     """
     Load JSON file with default fallback
+    Handles FileNotFoundError, JSONDecodeError, and PermissionError gracefully
     """
     try:
         with open(filepath, 'r') as f:
@@ -111,6 +112,9 @@ def load_json(filepath: str, default: Any = None) -> Any:
     except FileNotFoundError:
         return default if default is not None else []
     except json.JSONDecodeError:
+        return default if default is not None else []
+    except PermissionError:
+        # Log warning but don't crash - return default
         return default if default is not None else []
 
 
