@@ -131,16 +131,9 @@ class PumpEngine:
         if debug_counts is not None:
             debug_counts["after_data"] += 1
 
-        # Pump-specific volume filter (varies by mode)
-        if self.config.pump_only_mode and self.config.pump_aggressive_mode:
-            # AGGRESSIVE PUMP MODE: Looser volume requirement
-            min_volume = self.config.pump_aggressive_min_24h_quote_volume
-        elif self.config.pump_only_mode:
-            # PUMP-ONLY MODE: Stricter volume requirement
-            min_volume = self.config.pump_min_24h_quote_volume
-        else:
-            # NORMAL MODE: Standard requirement
-            min_volume = self.config.min_24h_quote_volume
+        # Pump volume filter - use PUMP_MIN_24H_QUOTE_VOLUME from config
+        # No hard-coded floors, fully configurable via env
+        min_volume = self.config.pump_min_24h_quote_volume
 
         if volume_24h < min_volume:
             if debug_rejections is not None:
@@ -252,10 +245,10 @@ class PumpEngine:
         elif return_check:
             score += 10
 
-        # Volume quality
-        if volume_24h > 500000:
+        # Volume quality bonus (relative to configured minimum)
+        if volume_24h > (min_volume * 2):
             score += 10
-        elif volume_24h > 200000:
+        elif volume_24h > min_volume:
             score += 5
 
         # Check minimum score (stricter in pump-only mode)
