@@ -429,13 +429,13 @@ class RealExchange(BaseExchange):
         self.client = ccxt.mexc({
             'apiKey': config.mexc_api_key,
             'secret': config.mexc_secret_key,
-            'timeout': 8000,
+            'timeout': 5000,  # 5s timeout to prevent scan loop stalling
             'enableRateLimit': True,
         })
 
         self.logger.info("🌐 RealExchange initialized (LIVE mode with MEXC)")
 
-    def _with_retries(self, func, label: str, max_attempts: int = 3, delay_sec: float = 2.0):
+    def _with_retries(self, func, label: str, max_attempts: int = 2, delay_sec: float = 1.0):
         """
         Retry wrapper for network calls with exponential backoff
 
@@ -449,11 +449,11 @@ class RealExchange(BaseExchange):
         Args:
             func: Function to call
             label: Description for logging
-            max_attempts: Max retry attempts (default: 3)
-            delay_sec: Initial delay between retries (default: 2.0s)
+            max_attempts: Max retry attempts (default: 2, reduced from 3 to fail-fast)
+            delay_sec: Initial delay between retries (default: 1.0s, reduced from 2.0s)
 
         Returns:
-            Result from func(), or None on failure
+            Result from func(), or None on failure (fail-safe: scan continues)
         """
         for attempt in range(max_attempts):
             try:
@@ -481,7 +481,7 @@ class RealExchange(BaseExchange):
                 self.logger.error(f"Error on attempt {attempt + 1}/{max_attempts}: {label} - {error_repr}")
 
                 if attempt < max_attempts - 1:
-                    # Exponential backoff: 2s, 4s, 8s
+                    # Exponential backoff: 1s (fail-fast to prevent scan loop stalling)
                     backoff = delay_sec * (2 ** attempt)
                     self.logger.debug(f"Retrying after {backoff:.1f}s...")
                     time.sleep(backoff)
@@ -636,13 +636,13 @@ class DataOnlyMexcExchange(BaseExchange):
 
         # Initialize MEXC client in public mode (no API keys required)
         self.client = ccxt.mexc({
-            'timeout': 8000,
+            'timeout': 5000,  # 5s timeout to prevent scan loop stalling
             'enableRateLimit': True,
         })
 
         self.logger.info("🌐 DataOnlyMexcExchange initialized (REAL MEXC data, PAPER trading only)")
 
-    def _with_retries(self, func, label: str, max_attempts: int = 3, delay_sec: float = 2.0):
+    def _with_retries(self, func, label: str, max_attempts: int = 2, delay_sec: float = 1.0):
         """
         Retry wrapper for network calls with exponential backoff
 
@@ -656,11 +656,11 @@ class DataOnlyMexcExchange(BaseExchange):
         Args:
             func: Function to call
             label: Description for logging
-            max_attempts: Max retry attempts (default: 3)
-            delay_sec: Initial delay between retries (default: 2.0s)
+            max_attempts: Max retry attempts (default: 2, reduced from 3 to fail-fast)
+            delay_sec: Initial delay between retries (default: 1.0s, reduced from 2.0s)
 
         Returns:
-            Result from func(), or None on failure
+            Result from func(), or None on failure (fail-safe: scan continues)
         """
         for attempt in range(max_attempts):
             try:
@@ -688,7 +688,7 @@ class DataOnlyMexcExchange(BaseExchange):
                 self.logger.error(f"Error on attempt {attempt + 1}/{max_attempts}: {label} - {error_repr}")
 
                 if attempt < max_attempts - 1:
-                    # Exponential backoff: 2s, 4s, 8s
+                    # Exponential backoff: 1s (fail-fast to prevent scan loop stalling)
                     backoff = delay_sec * (2 ** attempt)
                     self.logger.debug(f"Retrying after {backoff:.1f}s...")
                     time.sleep(backoff)
