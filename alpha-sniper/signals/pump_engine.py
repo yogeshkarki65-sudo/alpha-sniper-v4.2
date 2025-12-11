@@ -174,31 +174,40 @@ class PumpEngine:
         else:
             return_24h = 0
 
+        # Check if this is a new listing (bypass stricter filters if enabled)
+        is_new_listing = False
+        if self.config.pump_new_listing_bypass:
+            # Check if symbol is newly listed (< X minutes old)
+            # For now, we'll use volume spike as proxy for new listings
+            # TODO: Add exchange API call to get listing date if available
+            if rvol >= 5.0:  # Very high rvol often indicates new listing
+                is_new_listing = True
+
         # Pump filters (varies by mode)
         if self.config.pump_only_mode and self.config.pump_aggressive_mode:
             # AGGRESSIVE PUMP MODE: Looser filters for more signals
             rvol_check = rvol >= self.config.pump_aggressive_min_rvol
-            momentum_check = momentum_1h >= 20  # Looser momentum requirement
+            momentum_check = momentum_1h >= self.config.pump_aggressive_min_momentum  # Now configurable!
             return_check = self.config.pump_aggressive_min_24h_return <= return_24h <= self.config.pump_aggressive_max_24h_return
 
-            # Optional: Check RSI 5m if enabled
+            # Optional: Check RSI 5m if enabled (only if not new listing)
             rsi_check = True
-            if hasattr(self.config, 'pump_aggressive_momentum_rsi_5m'):
+            if not is_new_listing and hasattr(self.config, 'pump_aggressive_momentum_rsi_5m') and self.config.pump_aggressive_momentum_rsi_5m > 0:
                 df_5m = data.get('df_5m')
                 if df_5m is not None and len(df_5m) >= 15:
                     rsi_5m = helpers.calculate_rsi(df_5m, 14).iloc[-1]
                     rsi_check = rsi_5m >= self.config.pump_aggressive_momentum_rsi_5m
 
-            # Optional: Check price above EMA 1m
+            # Optional: Check price above EMA 1m (only if explicitly enabled)
             ema_check = True
-            if self.config.pump_aggressive_price_above_ema1m:
+            if not is_new_listing and self.config.pump_aggressive_price_above_ema1m:
                 df_1m = data.get('df_1m')
                 if df_1m is not None and len(df_1m) >= 50:
                     ema_50 = df_1m['close'].iloc[-50:].mean()
                     ema_check = current_price > ema_50
 
-            # Combine all aggressive checks
-            if not (rsi_check and ema_check):
+            # Combine all aggressive checks (skip if new listing)
+            if not is_new_listing and not (rsi_check and ema_check):
                 if debug_rejections is not None:
                     failed = []
                     if not rsi_check:
@@ -251,12 +260,17 @@ class PumpEngine:
         elif volume_24h > min_volume:
             score += 5
 
-        # Check minimum score (stricter in pump-only mode)
-        min_score = self.config.pump_min_score if self.config.pump_only_mode else 70
+        # Check minimum score (stricter in pump-only mode, unless new listing)
+        if is_new_listing:
+            min_score = self.config.pump_new_listing_min_score
+        else:
+            min_score = self.config.pump_min_score if self.config.pump_only_mode else 70
+
         if score < min_score:
             if debug_rejections is not None:
+                listing_tag = " [NEW_LISTING]" if is_new_listing else ""
                 debug_rejections.append(
-                    f"{symbol}: SCORE_TOO_LOW (score={score:.1f} < min={min_score}, "
+                    f"{symbol}: SCORE_TOO_LOW{listing_tag} (score={score:.1f} < min={min_score}, "
                     f"rvol={rvol:.2f}, mom={momentum_1h:.1f}, ret_24h={return_24h:.1f}%)"
                 )
             return None
@@ -264,18 +278,26 @@ class PumpEngine:
         if debug_counts is not None:
             debug_counts["after_score"] += 1
 
+        # For new listings, apply looser core conditions
+        if is_new_listing:
+            rvol_check = rvol >= self.config.pump_new_listing_min_rvol
+            momentum_check = momentum_1h >= self.config.pump_new_listing_min_momentum
+            # No return check for new listings (can be any size move)
+            return_check = True
+
         # Check all core conditions
         if not (rvol_check and momentum_check and return_check):
             if debug_rejections is not None:
                 failed = []
                 if not rvol_check:
-                    failed.append("RVOL_TOO_LOW")
+                    failed.append(f"RVOL_TOO_LOW ({rvol:.2f})")
                 if not momentum_check:
-                    failed.append("MOMENTUM_TOO_WEAK")
+                    failed.append(f"MOMENTUM_TOO_WEAK ({momentum_1h:.1f})")
                 if not return_check:
-                    failed.append("RETURN_24H_OUT_OF_RANGE")
+                    failed.append(f"RETURN_24H_OUT_OF_RANGE ({return_24h:.1f}%)")
+                listing_tag = " [NEW_LISTING]" if is_new_listing else ""
                 debug_rejections.append(
-                    f"{symbol}: CORE_CONDITIONS_FAILED ({', '.join(failed)})"
+                    f"{symbol}: CORE_CONDITIONS_FAILED{listing_tag} ({', '.join(failed)})"
                 )
             return None
 

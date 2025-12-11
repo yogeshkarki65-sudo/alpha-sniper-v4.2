@@ -99,14 +99,21 @@ class Config:
         # Simplified mode that uses ONLY the pump engine with stricter filters
         self.pump_only_mode = self.parse_bool(get_env("PUMP_ONLY_MODE", "false"))
 
-        # Stricter pump filters for pump-only mode
-        self.pump_min_24h_return = float(get_env("PUMP_MIN_24H_RETURN", "0.80"))
-        self.pump_max_24h_return = float(get_env("PUMP_MAX_24H_RETURN", "3.50"))
-        self.pump_min_rvol = float(get_env("PUMP_MIN_RVOL", "2.8"))
-        self.pump_min_momentum_1h = float(get_env("PUMP_MIN_MOMENTUM_1H", "40"))
-        self.pump_min_24h_quote_volume = float(get_env("PUMP_MIN_24H_QUOTE_VOLUME", "800000"))
-        self.pump_min_score = int(get_env("PUMP_MIN_SCORE", "85"))
+        # Stricter pump filters for pump-only mode (LOWERED DEFAULTS FOR MORE SIGNALS)
+        self.pump_min_24h_return = float(get_env("PUMP_MIN_24H_RETURN", "0.02"))
+        self.pump_max_24h_return = float(get_env("PUMP_MAX_24H_RETURN", "10.0"))
+        self.pump_min_rvol = float(get_env("PUMP_MIN_RVOL", "0.8"))
+        self.pump_min_momentum_1h = float(get_env("PUMP_MIN_MOMENTUM_1H", "5.0"))
+        self.pump_min_24h_quote_volume = float(get_env("PUMP_MIN_24H_QUOTE_VOLUME", "200000"))
+        self.pump_min_score = int(get_env("PUMP_MIN_SCORE", "15"))
         self.pump_max_hold_hours = int(get_env("PUMP_MAX_HOLD_HOURS", "4"))
+
+        # === NEW LISTING BYPASS (looser filters for newly listed tokens) ===
+        self.pump_new_listing_bypass = self.parse_bool(get_env("PUMP_NEW_LISTING_BYPASS", "false"))
+        self.pump_new_listing_max_age_minutes = int(get_env("PUMP_NEW_LISTING_MAX_AGE_MINUTES", "90"))
+        self.pump_new_listing_min_rvol = float(get_env("PUMP_NEW_LISTING_MIN_RVOL", "0.5"))
+        self.pump_new_listing_min_score = int(get_env("PUMP_NEW_LISTING_MIN_SCORE", "5"))
+        self.pump_new_listing_min_momentum = float(get_env("PUMP_NEW_LISTING_MIN_MOMENTUM", "0.3"))
 
         # Pump ATR-based trailing stop
         self.pump_trail_initial_atr_mult = float(get_env("PUMP_TRAIL_INITIAL_ATR_MULT", "2.0"))
@@ -120,12 +127,13 @@ class Config:
 
         # === AGGRESSIVE PUMP MODE (looser filters for more signals) ===
         self.pump_aggressive_mode = self.parse_bool(get_env("PUMP_AGGRESSIVE_MODE", "false"))
-        self.pump_aggressive_min_24h_return = float(get_env("PUMP_AGGRESSIVE_MIN_24H_RETURN", "0.30"))
-        self.pump_aggressive_max_24h_return = float(get_env("PUMP_AGGRESSIVE_MAX_24H_RETURN", "5.00"))
-        self.pump_aggressive_min_rvol = float(get_env("PUMP_AGGRESSIVE_MIN_RVOL", "1.8"))
-        self.pump_aggressive_min_24h_quote_volume = float(get_env("PUMP_AGGRESSIVE_MIN_24H_QUOTE_VOLUME", "500000"))
-        self.pump_aggressive_momentum_rsi_5m = int(get_env("PUMP_AGGRESSIVE_MOMENTUM_RSI_5M", "55"))
-        self.pump_aggressive_price_above_ema1m = self.parse_bool(get_env("PUMP_AGGRESSIVE_PRICE_ABOVE_EMA1M", "true"))
+        self.pump_aggressive_min_24h_return = float(get_env("PUMP_AGGRESSIVE_MIN_24H_RETURN", "0.10"))
+        self.pump_aggressive_max_24h_return = float(get_env("PUMP_AGGRESSIVE_MAX_24H_RETURN", "50.00"))
+        self.pump_aggressive_min_rvol = float(get_env("PUMP_AGGRESSIVE_MIN_RVOL", "1.0"))
+        self.pump_aggressive_min_momentum = float(get_env("PUMP_AGGRESSIVE_MIN_MOMENTUM", "3.0"))
+        self.pump_aggressive_min_24h_quote_volume = float(get_env("PUMP_AGGRESSIVE_MIN_24H_QUOTE_VOLUME", "150000"))
+        self.pump_aggressive_momentum_rsi_5m = int(get_env("PUMP_AGGRESSIVE_MOMENTUM_RSI_5M", "40"))
+        self.pump_aggressive_price_above_ema1m = self.parse_bool(get_env("PUMP_AGGRESSIVE_PRICE_ABOVE_EMA1M", "false"))
         self.pump_aggressive_max_hold_minutes = int(get_env("PUMP_AGGRESSIVE_MAX_HOLD_MINUTES", "90"))
 
         # === PUMP DEBUG LOGGING ===

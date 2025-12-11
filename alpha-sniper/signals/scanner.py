@@ -158,6 +158,18 @@ class Scanner:
                     rejected_counts['inactive'] += 1
                     continue
 
+                # Skip futures symbols (PERP contracts) - we want spot only
+                if '_PERP' in symbol or symbol.endswith('PERP') or ':' in symbol:
+                    rejected_counts['inactive'] += 1
+                    continue
+
+                # Skip if market type is explicitly 'swap' or 'future' (for SPOT-only mode)
+                if self.config.mexc_spot_enabled and not self.config.mexc_futures_enabled:
+                    market_type = market.get('type', '').lower()
+                    if market_type in ['swap', 'future', 'futures']:
+                        rejected_counts['inactive'] += 1
+                        continue
+
                 universe.append(symbol)
 
             self.logger.debug(
@@ -226,8 +238,12 @@ class Scanner:
                 df_15m = helpers.ohlcv_to_dataframe(ohlcv_15m)
                 df_1h = helpers.ohlcv_to_dataframe(ohlcv_1h)
 
-                # Fetch real funding rate (for short engine)
-                funding_rate = self.exchange.get_funding_rate(symbol)
+                # Fetch real funding rate ONLY for futures symbols (for short engine)
+                # Skip for spot symbols to prevent "contract does not exist" spam
+                funding_rate = 0
+                if '_PERP' in symbol or symbol.endswith('PERP') or ':' in symbol:
+                    # This is a futures contract, fetch funding rate
+                    funding_rate = self.exchange.get_funding_rate(symbol)
 
                 # Store data
                 market_data[symbol] = {
