@@ -28,12 +28,34 @@ class PumpEngine:
 
     def generate_signals(self, market_data: dict, regime: str, open_positions=None) -> list:
         """
-        Generate pump signals from market data
+        Generate pump signals from market data using regime-aware thresholds
         """
         signals = []
 
         if not self.config.pump_engine_enabled:
             return signals
+
+        # Get regime-specific thresholds
+        thresholds = self.config.get_pump_thresholds(regime)
+
+        # Log active thresholds for this regime
+        if self.debug_enabled:
+            self.logger.info(
+                "[PUMP_DEBUG] Active thresholds (regime=%s): "
+                "min_vol=%.0f, min_score=%d, min_rvol=%.1f, min_return=%.2f%%, "
+                "max_return=%.1f%%, min_momentum=%.1f, "
+                "new_listing_min_rvol=%.1f, new_listing_min_score=%d, new_listing_min_momentum=%.1f",
+                regime,
+                thresholds.min_24h_quote_volume,
+                thresholds.min_score,
+                thresholds.min_rvol,
+                thresholds.min_24h_return,
+                thresholds.max_24h_return,
+                thresholds.min_momentum,
+                thresholds.new_listing_min_rvol,
+                thresholds.new_listing_min_score,
+                thresholds.new_listing_min_momentum,
+            )
 
         # Filter valid symbols (exclude leveraged tokens and perps)
         quote = "USDT"
@@ -67,6 +89,7 @@ class PumpEngine:
                     market_data.get(symbol),
                     regime,
                     open_positions,
+                    thresholds=thresholds,
                     debug_counts=debug_counts,
                     debug_rejections=debug_rejections,
                 )
@@ -102,11 +125,12 @@ class PumpEngine:
         data: dict,
         regime: str,
         open_positions,
+        thresholds,
         debug_counts=None,
         debug_rejections=None,
     ):
         """
-        Evaluate a single symbol for pump entry
+        Evaluate a single symbol for pump entry using regime-aware thresholds
 
         Returns:
             signal dict or None
@@ -131,9 +155,8 @@ class PumpEngine:
         if debug_counts is not None:
             debug_counts["after_data"] += 1
 
-        # Pump volume filter - use PUMP_MIN_24H_QUOTE_VOLUME from config
-        # No hard-coded floors, fully configurable via env
-        min_volume = self.config.pump_min_24h_quote_volume
+        # Pump volume filter - use regime-aware threshold
+        min_volume = thresholds.min_24h_quote_volume
 
         if volume_24h < min_volume:
             if debug_rejections is not None:
@@ -177,58 +200,23 @@ class PumpEngine:
         # Check if this is a new listing (bypass stricter filters if enabled)
         is_new_listing = False
         if self.config.pump_new_listing_bypass:
-            # Check if symbol is newly listed (< X minutes old)
-            # For now, we'll use volume spike as proxy for new listings
-            # TODO: Add exchange API call to get listing date if available
-            if rvol >= 5.0:  # Very high rvol often indicates new listing
+            # Check if symbol is newly listed using RVOL spike as proxy
+            # RVOL >= 5.0 often indicates new listing activity
+            if rvol >= 5.0:
                 is_new_listing = True
 
-        # Pump filters (varies by mode)
-        if self.config.pump_only_mode and self.config.pump_aggressive_mode:
-            # AGGRESSIVE PUMP MODE: Looser filters for more signals
-            rvol_check = rvol >= self.config.pump_aggressive_min_rvol
-            momentum_check = momentum_1h >= self.config.pump_aggressive_min_momentum  # Now configurable!
-            return_check = self.config.pump_aggressive_min_24h_return <= return_24h <= self.config.pump_aggressive_max_24h_return
-
-            # Optional: Check RSI 5m if enabled (only if not new listing)
-            rsi_check = True
-            if not is_new_listing and hasattr(self.config, 'pump_aggressive_momentum_rsi_5m') and self.config.pump_aggressive_momentum_rsi_5m > 0:
-                df_5m = data.get('df_5m')
-                if df_5m is not None and len(df_5m) >= 15:
-                    rsi_5m = helpers.calculate_rsi(df_5m, 14).iloc[-1]
-                    rsi_check = rsi_5m >= self.config.pump_aggressive_momentum_rsi_5m
-
-            # Optional: Check price above EMA 1m (only if explicitly enabled)
-            ema_check = True
-            if not is_new_listing and self.config.pump_aggressive_price_above_ema1m:
-                df_1m = data.get('df_1m')
-                if df_1m is not None and len(df_1m) >= 50:
-                    ema_50 = df_1m['close'].iloc[-50:].mean()
-                    ema_check = current_price > ema_50
-
-            # Combine all aggressive checks (skip if new listing)
-            if not is_new_listing and not (rsi_check and ema_check):
-                if debug_rejections is not None:
-                    failed = []
-                    if not rsi_check:
-                        failed.append("RSI_5m_TOO_LOW")
-                    if not ema_check:
-                        failed.append("PRICE_BELOW_EMA1m")
-                    debug_rejections.append(
-                        f"{symbol}: AGGRESSIVE_CHECKS_FAILED ({', '.join(failed)})"
-                    )
-                return None
-
-        elif self.config.pump_only_mode:
-            # PUMP-ONLY MODE: Use stricter filters
-            rvol_check = rvol >= self.config.pump_min_rvol
-            momentum_check = momentum_1h >= self.config.pump_min_momentum_1h
-            return_check = self.config.pump_min_24h_return <= return_24h <= self.config.pump_max_24h_return
+        # Apply regime-aware thresholds (simple, no complex mode logic)
+        if is_new_listing:
+            # Use relaxed new listing thresholds
+            rvol_check = rvol >= thresholds.new_listing_min_rvol
+            momentum_check = momentum_1h >= thresholds.new_listing_min_momentum
+            # No return check for new listings (can be any size move)
+            return_check = True
         else:
-            # NORMAL MODE: Standard pump filters
-            rvol_check = rvol >= 2.0
-            momentum_check = momentum_1h >= 25
-            return_check = 30 <= return_24h <= 400  # Not too early, not too late
+            # Use standard regime thresholds
+            rvol_check = rvol >= thresholds.min_rvol
+            momentum_check = momentum_1h >= thresholds.min_momentum
+            return_check = thresholds.min_24h_return <= return_24h <= thresholds.max_24h_return
 
         # Calculate score
         score = 0
@@ -260,11 +248,11 @@ class PumpEngine:
         elif volume_24h > min_volume:
             score += 5
 
-        # Check minimum score (stricter in pump-only mode, unless new listing)
+        # Check minimum score using regime-aware thresholds
         if is_new_listing:
-            min_score = self.config.pump_new_listing_min_score
+            min_score = thresholds.new_listing_min_score
         else:
-            min_score = self.config.pump_min_score if self.config.pump_only_mode else 70
+            min_score = thresholds.min_score
 
         if score < min_score:
             if debug_rejections is not None:
@@ -277,13 +265,6 @@ class PumpEngine:
 
         if debug_counts is not None:
             debug_counts["after_score"] += 1
-
-        # For new listings, apply looser core conditions
-        if is_new_listing:
-            rvol_check = rvol >= self.config.pump_new_listing_min_rvol
-            momentum_check = momentum_1h >= self.config.pump_new_listing_min_momentum
-            # No return check for new listings (can be any size move)
-            return_check = True
 
         # Check all core conditions
         if not (rvol_check and momentum_check and return_check):

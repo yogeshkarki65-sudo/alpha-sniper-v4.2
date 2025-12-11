@@ -1,6 +1,23 @@
 import os
 import re
+from dataclasses import dataclass
+from typing import Optional
 from dotenv import load_dotenv
+
+
+@dataclass
+class PumpThresholds:
+    """Regime-specific pump signal thresholds"""
+    min_24h_quote_volume: float
+    min_score: int
+    min_rvol: float
+    min_24h_return: float
+    max_24h_return: float
+    min_momentum: float
+    new_listing_min_rvol: float
+    new_listing_min_score: int
+    new_listing_min_momentum: float
+
 
 class Config:
     def __init__(self):
@@ -153,6 +170,140 @@ class Config:
         if not self.sim_mode:
             if not self.mexc_api_key or not self.mexc_secret_key:
                 raise Exception("Live mode requires MEXC_API_KEY and MEXC_SECRET_KEY in the environment")
+
+        # Store get_env for use in instance methods
+        self._get_env = get_env
+
+    def get_pump_thresholds(self, regime: str) -> PumpThresholds:
+        """
+        Get regime-specific pump thresholds with fallback logic:
+        1. Try regime-specific env var (e.g., PUMP_STRONG_BULL_MIN_SCORE)
+        2. Fall back to base env var (e.g., PUMP_MIN_SCORE)
+        3. Fall back to regime-based default (Grok's suggestions)
+
+        Supported regimes: STRONG_BULL, SIDEWAYS, MILD_BEAR, FULL_BEAR
+        """
+        regime_upper = regime.upper().replace(' ', '_')
+
+        # Define regime-based defaults (from Grok's analysis)
+        regime_defaults = {
+            'STRONG_BULL': {
+                'min_24h_quote_volume': 100000,
+                'min_score': 20,
+                'min_rvol': 1.5,
+                'min_24h_return': 0.05,
+                'max_24h_return': 15.0,
+                'min_momentum': 2.0,
+                'new_listing_min_rvol': 1.0,
+                'new_listing_min_score': 10,
+                'new_listing_min_momentum': 0.5,
+            },
+            'PUMPY': {  # Alias for STRONG_BULL
+                'min_24h_quote_volume': 100000,
+                'min_score': 20,
+                'min_rvol': 1.5,
+                'min_24h_return': 0.05,
+                'max_24h_return': 15.0,
+                'min_momentum': 2.0,
+                'new_listing_min_rvol': 1.0,
+                'new_listing_min_score': 10,
+                'new_listing_min_momentum': 0.5,
+            },
+            'SIDEWAYS': {
+                'min_24h_quote_volume': 150000,
+                'min_score': 30,
+                'min_rvol': 2.0,
+                'min_24h_return': 0.03,
+                'max_24h_return': 10.0,
+                'min_momentum': 3.0,
+                'new_listing_min_rvol': 1.2,
+                'new_listing_min_score': 15,
+                'new_listing_min_momentum': 1.0,
+            },
+            'NEUTRAL': {  # Alias for SIDEWAYS
+                'min_24h_quote_volume': 150000,
+                'min_score': 30,
+                'min_rvol': 2.0,
+                'min_24h_return': 0.03,
+                'max_24h_return': 10.0,
+                'min_momentum': 3.0,
+                'new_listing_min_rvol': 1.2,
+                'new_listing_min_score': 15,
+                'new_listing_min_momentum': 1.0,
+            },
+            'MILD_BEAR': {
+                'min_24h_quote_volume': 200000,
+                'min_score': 40,
+                'min_rvol': 2.5,
+                'min_24h_return': 0.07,
+                'max_24h_return': 8.0,
+                'min_momentum': 4.0,
+                'new_listing_min_rvol': 1.5,
+                'new_listing_min_score': 20,
+                'new_listing_min_momentum': 1.5,
+            },
+            'FULL_BEAR': {
+                'min_24h_quote_volume': 300000,
+                'min_score': 50,
+                'min_rvol': 3.0,
+                'min_24h_return': 0.10,
+                'max_24h_return': 5.0,
+                'min_momentum': 5.0,
+                'new_listing_min_rvol': 2.0,
+                'new_listing_min_score': 30,
+                'new_listing_min_momentum': 2.0,
+            },
+            'BEAR': {  # Alias for FULL_BEAR
+                'min_24h_quote_volume': 300000,
+                'min_score': 50,
+                'min_rvol': 3.0,
+                'min_24h_return': 0.10,
+                'max_24h_return': 5.0,
+                'min_momentum': 5.0,
+                'new_listing_min_rvol': 2.0,
+                'new_listing_min_score': 30,
+                'new_listing_min_momentum': 2.0,
+            },
+        }
+
+        # Get defaults for this regime (or SIDEWAYS as ultimate fallback)
+        defaults = regime_defaults.get(regime_upper, regime_defaults['SIDEWAYS'])
+
+        # Helper to get value with triple fallback: regime-specific → base → default
+        def get_threshold(param_name: str, default_value):
+            # Try regime-specific env var first
+            regime_env_var = f"PUMP_{regime_upper}_{param_name.upper()}"
+            regime_value = self._get_env(regime_env_var, None)
+            if regime_value is not None and regime_value != '':
+                try:
+                    return type(default_value)(regime_value)
+                except:
+                    pass
+
+            # Try base env var
+            base_env_var = f"PUMP_{param_name.upper()}"
+            base_value = self._get_env(base_env_var, None)
+            if base_value is not None and base_value != '':
+                try:
+                    return type(default_value)(base_value)
+                except:
+                    pass
+
+            # Use default
+            return default_value
+
+        # Build thresholds with fallback logic
+        return PumpThresholds(
+            min_24h_quote_volume=get_threshold('min_24h_quote_volume', defaults['min_24h_quote_volume']),
+            min_score=get_threshold('min_score', defaults['min_score']),
+            min_rvol=get_threshold('min_rvol', defaults['min_rvol']),
+            min_24h_return=get_threshold('min_24h_return', defaults['min_24h_return']),
+            max_24h_return=get_threshold('max_24h_return', defaults['max_24h_return']),
+            min_momentum=get_threshold('min_momentum', defaults['min_momentum']),
+            new_listing_min_rvol=get_threshold('new_listing_min_rvol', defaults['new_listing_min_rvol']),
+            new_listing_min_score=get_threshold('new_listing_min_score', defaults['new_listing_min_score']),
+            new_listing_min_momentum=get_threshold('new_listing_min_momentum', defaults['new_listing_min_momentum']),
+        )
 
     @staticmethod
     def parse_bool(value):
