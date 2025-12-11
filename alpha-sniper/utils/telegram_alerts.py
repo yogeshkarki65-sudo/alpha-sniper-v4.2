@@ -69,8 +69,7 @@ class TelegramAlertManager:
         if mode == 'LIVE':
             msg += f"\n💰 <i>Equity will sync from MEXC shortly</i>"
 
-        self.telegram.send(msg)
-        self.logger.info("[TELEGRAM] Startup alert sent")
+        self.telegram.send(msg, description="Startup")
 
     def send_equity_sync(self, config_equity: float, mexc_balance: float):
         """
@@ -91,8 +90,7 @@ class TelegramAlertManager:
             f"<b>Difference:</b> ${diff:+.2f} ({diff_pct:+.1f}%)\n"
         )
 
-        self.telegram.send(msg)
-        self.logger.info("[TELEGRAM] Equity sync alert sent")
+        self.telegram.send(msg, description="Equity Sync")
 
     def send_regime_change(self, old_regime: str, new_regime: str, btc_price: float):
         """
@@ -122,8 +120,7 @@ class TelegramAlertManager:
             f"<b>Time:</b> {datetime.now(timezone.utc).strftime('%H:%M:%S UTC')}\n"
         )
 
-        self.telegram.send(msg)
-        self.logger.info(f"[TELEGRAM] Regime change alert sent: {old_regime} -> {new_regime}")
+        self.telegram.send(msg, description=f"Regime Change ({old_regime}→{new_regime})")
 
     def send_trade_open(self, symbol: str, side: str, engine: str, regime: str,
                         size: float, entry: float, stop: float, target: Optional[float],
@@ -172,8 +169,7 @@ class TelegramAlertManager:
 
         msg += f"<b>Time:</b> {datetime.now(timezone.utc).strftime('%H:%M:%S UTC')}\n"
 
-        self.telegram.send(msg)
-        self.logger.info(f"[TELEGRAM] Trade open alert sent: {symbol} {side} @ {entry}")
+        self.telegram.send(msg, description=f"Trade Open ({symbol} {side})")
 
     def send_trade_close(self, symbol: str, side: str, engine: str, regime: str,
                          entry: float, exit_price: float, size: float,
@@ -230,7 +226,7 @@ class TelegramAlertManager:
             f"<b>Time:</b> {datetime.now(timezone.utc).strftime('%H:%M:%S UTC')}\n"
         )
 
-        self.telegram.send(msg)
+        self.telegram.send(msg, description=f"Trade Close ({symbol} {emoji})")
         self.logger.info(f"[TELEGRAM] Trade close alert sent: {symbol} {pnl_usd:+.2f} USD")
 
         # Update daily stats
@@ -295,7 +291,7 @@ class TelegramAlertManager:
 
         msg += f"<b>Time:</b> {datetime.now(timezone.utc).strftime('%H:%M:%S UTC')}\n"
 
-        self.telegram.send(msg)
+        self.telegram.send(msg, description="Daily Summary")
         self.logger.info(f"[TELEGRAM] Daily summary sent: {self.daily_trades} trades, ${self.daily_pnl:+.2f}")
 
         # Reset daily stats
@@ -327,7 +323,7 @@ class TelegramAlertManager:
             f"\n⚠️ <i>Check logs immediately</i>"
         )
 
-        self.telegram.send(msg)
+        self.telegram.send(msg, description=f"Crash Alert ({exception_type})")
         self.logger.info(f"[TELEGRAM] Crash alert sent: {exception_type}")
 
     def send_daily_loss_limit_hit(self, loss_pct: float, max_loss_pct: float):
@@ -348,7 +344,7 @@ class TelegramAlertManager:
             f"Will resume at UTC 00:00"
         )
 
-        self.telegram.send(msg)
+        self.telegram.send(msg, description="Daily Loss Limit Hit")
         self.logger.info(f"[TELEGRAM] Daily loss limit alert sent: {loss_pct:.2f}%")
 
     def check_and_send_daily_summary(self, current_equity: float, open_positions: int):
