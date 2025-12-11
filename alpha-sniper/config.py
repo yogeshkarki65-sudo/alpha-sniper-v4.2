@@ -37,6 +37,8 @@ class Config:
         self.sim_data_source = get_env("SIM_DATA_SOURCE", "FAKE").upper()
         self.mexc_api_key = get_env("MEXC_API_KEY", "")
         self.mexc_secret_key = get_env("MEXC_SECRET_KEY", "")
+        self.mexc_spot_enabled = self.parse_bool(get_env("MEXC_SPOT_ENABLED", "true"))
+        self.mexc_futures_enabled = self.parse_bool(get_env("MEXC_FUTURES_ENABLED", "false"))
         self.telegram_bot_token = get_env("TELEGRAM_BOT_TOKEN", "")
         self.telegram_chat_id = get_env("TELEGRAM_CHAT_ID", "")
         self.starting_equity = float(get_env("STARTING_EQUITY", "1000"))
