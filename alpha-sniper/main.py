@@ -887,18 +887,29 @@ class AlphaSniperBot:
     def shutdown(self):
         """
         Graceful shutdown
+
+        NOTE: Does NOT call sys.exit() - that must be handled by the caller
+        to avoid SystemExit exceptions inside async event loops
         """
         self.logger.info("🛑 Shutting down...")
 
+        # Stop the bot loop
+        self.running = False
+
         # Save final positions
-        self.risk_engine.save_positions(self.config.positions_file_path)
+        try:
+            self.risk_engine.save_positions(self.config.positions_file_path)
+        except Exception as e:
+            self.logger.error(f"Error saving positions during shutdown: {e}")
 
         # Send shutdown notification
         if not self.config.sim_mode:
-            self.telegram.send("🛑 Alpha Sniper V4.2 stopped")
+            try:
+                self.telegram.send("🛑 Alpha Sniper V4.2 stopped", description="Shutdown")
+            except Exception as e:
+                self.logger.error(f"Error sending Telegram shutdown message: {e}")
 
         self.logger.info("👋 Goodbye!")
-        sys.exit(0)
 
 
 def main():

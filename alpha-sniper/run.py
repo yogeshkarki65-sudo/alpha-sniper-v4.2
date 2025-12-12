@@ -164,6 +164,9 @@ Safety:
     logger.info("=" * 70)
 
     # Create and run bot (delegates to existing main.py logic)
+    bot = None
+    exit_code = 0
+
     try:
         # Import here to ensure logging is setup first
         import signal
@@ -174,8 +177,8 @@ Safety:
         def signal_handler(sig, frame):
             logger.info("")
             logger.info("👋 Received shutdown signal")
-            bot.running = False
-            bot.shutdown()
+            if bot:
+                bot.shutdown()  # Sets bot.running = False and saves state
 
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
@@ -186,21 +189,37 @@ Safety:
             bot.trading_cycle()
             logger.info("✅ Test cycle complete, exiting")
             bot.shutdown()
+            exit_code = 0
         else:
             # Start health check server in background thread
             from alpha_sniper.health import start_health_server
             start_health_server(bot)
 
-            # Normal scheduled mode
+            # Normal scheduled mode - will run until bot.running = False
             bot.run()
+
+            # Clean shutdown after bot.run() completes
+            logger.info("📊 Bot run loop completed normally")
+            exit_code = 0
 
     except KeyboardInterrupt:
         logger.info("👋 Keyboard interrupt received")
-        sys.exit(0)
+        if bot:
+            bot.shutdown()
+        exit_code = 0
     except Exception as e:
         logger.error(f"❌ Fatal error: {e}")
         logger.exception(e)
-        sys.exit(1)
+        if bot:
+            try:
+                bot.shutdown()
+            except Exception as shutdown_error:
+                logger.error(f"Error during emergency shutdown: {shutdown_error}")
+        exit_code = 1
+    finally:
+        # Exit cleanly with appropriate code
+        # This happens AFTER all cleanup, outside async context
+        sys.exit(exit_code)
 
 
 if __name__ == "__main__":

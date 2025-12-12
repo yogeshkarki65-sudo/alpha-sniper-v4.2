@@ -113,9 +113,10 @@ class PumpEngine:
             )
 
             if debug_rejections:
-                self.logger.info("[PUMP_DEBUG] Sample rejections (first %d):", min(len(debug_rejections), 20))
+                sample_count = min(len(debug_rejections), 20)
+                self.logger.info(f"[PUMP_DEBUG] Sample rejections (first {sample_count}):")
                 for msg in debug_rejections[:20]:
-                    self.logger.info("[PUMP_DEBUG]   %s", msg)
+                    self.logger.info(f"[PUMP_DEBUG]   {msg}")
 
         return signals
 
