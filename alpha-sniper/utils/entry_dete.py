@@ -23,6 +23,7 @@ Design Philosophy:
 """
 
 import time
+import traceback
 from datetime import datetime, timezone
 
 
@@ -275,22 +276,79 @@ class EntryDETEngine:
         signal = pending['raw_signal'].copy()
         signal['entry_price'] = entry_price
 
-        # Call risk engine to open position
-        # This follows the same path as regular signals
+        # Follow same pattern as main.py for opening positions
         try:
-            position = self.risk_engine.open_position(signal)
-            if position:
+            # Check if we can open new position
+            can_open, reason = self.risk_engine.can_open_new_position(signal)
+
+            if not can_open:
+                self.logger.warning(
+                    f"[Entry-DETE] Cannot open {signal['symbol']}: {reason}"
+                )
+                return
+
+            # Calculate position size
+            size_usd, size_tokens, risk_pct, stop_pct, r_multiple = \
+                self.risk_engine.calculate_position_size(signal)
+
+            # Build position dict
+            position = {
+                'symbol': signal['symbol'],
+                'side': signal['side'],
+                'entry_price': entry_price,
+                'size_usd': size_usd,
+                'size_tokens': size_tokens,
+                'stop_loss': signal['stop_loss'],
+                'tp_2r': signal.get('tp_2r', 0),
+                'tp_4r': signal.get('tp_4r', 0),
+                'timestamp_open': datetime.now(timezone.utc).isoformat(),
+                'engine': signal.get('engine', 'unknown'),
+                'score': signal.get('score', 0),
+                'regime': self.risk_engine.current_regime,
+                'max_hold_hours': signal.get('max_hold_hours', 48),
+                'risk_pct': risk_pct,
+                'partial_tp_hit': False,
+                'highest_price': entry_price,
+            }
+
+            # SIM mode: just add position
+            if self.config.sim_mode:
+                self.risk_engine.add_position(position)
                 self.logger.info(
-                    f"[Entry-DETE] Position opened | symbol={signal['symbol']} | "
-                    f"side={signal['side']} | entry={entry_price:.6f}"
+                    f"[Entry-DETE] ✅ SIM position opened | symbol={signal['symbol']} | "
+                    f"side={signal['side']} | entry={entry_price:.6f} | size=${size_usd:.2f}"
                 )
             else:
-                self.logger.warning(
-                    f"[Entry-DETE] Failed to open position for {signal['symbol']} "
-                    f"(risk engine rejected)"
+                # LIVE mode: create real order on MEXC
+                order = self.exchange.create_order(
+                    symbol=signal['symbol'],
+                    side=signal['side'],
+                    size_usd=size_usd,
+                    order_type='MARKET'
                 )
+
+                if order:
+                    self.logger.info(
+                        f"[Entry-DETE] ✅ LIVE order created | {signal['symbol']} | "
+                        f"Side: {signal['side']} | Size: ${size_usd:.2f} | Order ID: {order['id']}"
+                    )
+
+                    position['order_id'] = order['id']
+                    self.risk_engine.add_position(position)
+
+                    self.logger.info(
+                        f"[Entry-DETE] ✅ Position opened | symbol={signal['symbol']} | "
+                        f"side={signal['side']} | entry={entry_price:.6f}"
+                    )
+                else:
+                    self.logger.error(
+                        f"[Entry-DETE] 🔴 Failed to create order for {signal['symbol']}"
+                    )
+
         except Exception as e:
             self.logger.error(f"[Entry-DETE] Error opening position: {e}")
+            import traceback
+            self.logger.error(f"[Entry-DETE] Traceback: {traceback.format_exc()}")
 
     def get_pending_count(self):
         """Return count of pending signals (for monitoring)"""
