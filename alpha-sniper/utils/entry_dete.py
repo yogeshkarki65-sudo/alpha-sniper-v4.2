@@ -320,20 +320,25 @@ class EntryDETEngine:
                 )
             else:
                 # LIVE mode: create real order on MEXC
+                # Calculate amount in base currency (same pattern as main.py)
+                amount = size_usd / entry_price
+
                 order = self.exchange.create_order(
                     symbol=signal['symbol'],
-                    side=signal['side'],
-                    size_usd=size_usd,
-                    order_type='MARKET'
+                    type='market',
+                    side='buy' if signal['side'] == 'long' else 'sell',
+                    amount=amount,
+                    params={'leverage': 1}
                 )
 
                 if order:
                     self.logger.info(
                         f"[Entry-DETE] ✅ LIVE order created | {signal['symbol']} | "
-                        f"Side: {signal['side']} | Size: ${size_usd:.2f} | Order ID: {order['id']}"
+                        f"Side: {signal['side']} | Size: ${size_usd:.2f} | "
+                        f"Amount: {amount:.6f} | Order ID: {order.get('id', 'N/A')}"
                     )
 
-                    position['order_id'] = order['id']
+                    position['order_id'] = order.get('id')
                     self.risk_engine.add_position(position)
 
                     self.logger.info(
