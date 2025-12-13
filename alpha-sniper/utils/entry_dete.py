@@ -287,28 +287,42 @@ class EntryDETEngine:
                 )
                 return
 
-            # Calculate position size
-            size_usd, size_tokens, risk_pct, stop_pct, r_multiple = \
-                self.risk_engine.calculate_position_size(signal)
+            # Calculate position size (correct signature matching main.py)
+            stop_loss = signal['stop_loss']
+            size_usd = self.risk_engine.calculate_position_size(signal, entry_price, stop_loss)
+
+            # Minimum position size check
+            min_position_size = max(1.0, self.config.starting_equity * 0.01)
+            if size_usd < min_position_size:
+                self.logger.debug(
+                    f"[Entry-DETE] Position size too small for {signal['symbol']}: "
+                    f"${size_usd:.2f} (min: ${min_position_size:.2f})"
+                )
+                return
+
+            # Calculate other values manually (same as main.py)
+            risk_pct = self.risk_engine.get_risk_per_trade(signal.get('engine', 'standard'))
+            equity_at_entry = self.risk_engine.current_equity
+            initial_risk_usd = equity_at_entry * risk_pct
+            qty = size_usd / entry_price if entry_price > 0 else 0
 
             # Build position dict
             position = {
                 'symbol': signal['symbol'],
                 'side': signal['side'],
                 'entry_price': entry_price,
-                'size_usd': size_usd,
-                'size_tokens': size_tokens,
-                'stop_loss': signal['stop_loss'],
+                'stop_loss': stop_loss,
                 'tp_2r': signal.get('tp_2r', 0),
                 'tp_4r': signal.get('tp_4r', 0),
-                'timestamp_open': datetime.now(timezone.utc).isoformat(),
-                'engine': signal.get('engine', 'unknown'),
+                'size_usd': size_usd,
+                'qty': qty,
+                'risk_pct': risk_pct,
+                'initial_risk_usd': initial_risk_usd,
+                'equity_at_entry': equity_at_entry,
                 'score': signal.get('score', 0),
                 'regime': self.risk_engine.current_regime,
-                'max_hold_hours': signal.get('max_hold_hours', 48),
-                'risk_pct': risk_pct,
-                'partial_tp_hit': False,
-                'highest_price': entry_price,
+                'timestamp_open': time.time(),
+                'max_hold_hours': signal.get('max_hold_hours', 48)
             }
 
             # SIM mode: just add position

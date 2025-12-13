@@ -62,20 +62,50 @@ class Scanner:
         self.logger.debug(f"📊 Market data fetched for {len(market_data)} symbols")
 
         # 3. Run engines (PUMP-ONLY MODE or multi-engine)
+        # Wrap engine calls in try/except to prevent crashes from breaking scan loop
         if self.config.pump_only_mode:
             # PUMP-ONLY MODE: Use ONLY the pump engine
             self.logger.info("🎯 PUMP-ONLY MODE: Using pump engine exclusively")
-            pump_signals = self.pump_engine.generate_signals(market_data, regime)
+            try:
+                pump_signals = self.pump_engine.generate_signals(market_data, regime)
+            except Exception as e:
+                self.logger.error(f"🔴 Pump engine crashed (non-fatal): {e}")
+                self.logger.exception(e)
+                pump_signals = []
+
             all_signals = pump_signals
             long_signals = []
             short_signals = []
             bear_micro_signals = []
         else:
-            # NORMAL MODE: Run all engines
-            long_signals = self.long_engine.generate_signals(market_data, regime)
-            short_signals = self.short_engine.generate_signals(market_data, regime)
-            pump_signals = self.pump_engine.generate_signals(market_data, regime)
-            bear_micro_signals = self.bear_micro_engine.generate_signals(market_data, regime)
+            # NORMAL MODE: Run all engines (each wrapped to prevent cascading failures)
+            try:
+                long_signals = self.long_engine.generate_signals(market_data, regime)
+            except Exception as e:
+                self.logger.error(f"🔴 Long engine crashed (non-fatal): {e}")
+                self.logger.exception(e)
+                long_signals = []
+
+            try:
+                short_signals = self.short_engine.generate_signals(market_data, regime)
+            except Exception as e:
+                self.logger.error(f"🔴 Short engine crashed (non-fatal): {e}")
+                self.logger.exception(e)
+                short_signals = []
+
+            try:
+                pump_signals = self.pump_engine.generate_signals(market_data, regime)
+            except Exception as e:
+                self.logger.error(f"🔴 Pump engine crashed (non-fatal): {e}")
+                self.logger.exception(e)
+                pump_signals = []
+
+            try:
+                bear_micro_signals = self.bear_micro_engine.generate_signals(market_data, regime)
+            except Exception as e:
+                self.logger.error(f"🔴 Bear micro engine crashed (non-fatal): {e}")
+                self.logger.exception(e)
+                bear_micro_signals = []
 
             # 4. Combine and sort signals by score
             all_signals = long_signals + short_signals + pump_signals + bear_micro_signals

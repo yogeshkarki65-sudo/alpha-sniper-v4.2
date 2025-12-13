@@ -338,14 +338,13 @@ class PumpEngine:
 
         # Log successful signal if debug enabled
         if self.debug_enabled:
-            self.logger.info(
-                "[PUMP_DEBUG] %s: ✅ SIGNAL (score=%.1f, rvol=%.2f, mom=%.1f, ret_24h=%.1f%%, vol_24h=$%,.0f)",
-                symbol,
-                score,
-                rvol,
-                momentum_1h,
-                return_24h,
-                volume_24h,
-            )
+            try:
+                self.logger.info(
+                    f"[PUMP_DEBUG] {symbol}: ✅ SIGNAL (score={score:.1f}, rvol={rvol:.2f}, "
+                    f"mom={momentum_1h:.1f}, ret_24h={return_24h:.1f}%, vol_24h=${volume_24h:,.0f})"
+                )
+            except Exception as e:
+                # Logging must never crash signal generation
+                self.logger.error(f"[PUMP_DEBUG] Failed to log signal for {symbol}: {e}")
 
         return signal
