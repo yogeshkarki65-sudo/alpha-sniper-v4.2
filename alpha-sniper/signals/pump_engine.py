@@ -339,9 +339,10 @@ class PumpEngine:
         # Log successful signal if debug enabled
         if self.debug_enabled:
             try:
+                # Cast all values to Python float to avoid numpy formatting issues
                 self.logger.info(
-                    f"[PUMP_DEBUG] {symbol}: ✅ SIGNAL (score={score:.1f}, rvol={rvol:.2f}, "
-                    f"mom={momentum_1h:.1f}, ret_24h={return_24h:.1f}%, vol_24h=${volume_24h:,.0f})"
+                    f"[PUMP_DEBUG] {symbol}: ✅ SIGNAL (score={float(score):.1f}, rvol={float(rvol):.2f}, "
+                    f"mom={float(momentum_1h):.1f}, ret_24h={float(return_24h):.1f}%, vol_24h=${float(volume_24h):.0f})"
                 )
             except Exception as e:
                 # Logging must never crash signal generation
