@@ -131,7 +131,7 @@ class BearMicroLongEngine:
         stop_loss = max(sl_atr, sl_pct, swing_low * 0.995)
 
         # Enforce minimum stop distance (Fast Stop Manager safety rail for bear_micro)
-        min_stop_distance = current_price * config.min_stop_pct_bear_micro
+        min_stop_distance = current_price * self.config.min_stop_pct_bear_micro
         actual_stop_distance = current_price - stop_loss
         if actual_stop_distance < min_stop_distance:
             stop_loss = current_price - min_stop_distance

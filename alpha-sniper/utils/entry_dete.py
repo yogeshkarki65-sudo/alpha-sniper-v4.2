@@ -63,6 +63,15 @@ class EntryDETEngine:
             self.logger.warning("[Entry-DETE] Called but disabled - this is a bug!")
             return
 
+        # Validate baseline price
+        baseline_price = signal.get('entry_price', 0)
+        if baseline_price <= 0:
+            self.logger.warning(
+                f"[Entry-DETE] DROPPED signal for {signal['symbol']}: "
+                f"baseline_price={baseline_price} is invalid (must be > 0)"
+            )
+            return
+
         # Create pending entry object
         pending = {
             'symbol': signal['symbol'],
@@ -70,7 +79,7 @@ class EntryDETEngine:
             'engine': signal.get('engine', 'unknown'),
             'score': signal.get('score', 0),
             'regime': signal.get('regime', 'UNKNOWN'),
-            'baseline_price': signal.get('entry_price', 0),
+            'baseline_price': baseline_price,
             'created_at': time.time(),
             'max_wait_seconds': self.config.entry_dete_max_wait_seconds,
             'raw_signal': signal  # Keep full signal for later
@@ -153,7 +162,11 @@ class EntryDETEngine:
                     )
 
                     # Open position via risk engine
-                    self._open_position_from_pending(pending, current_price)
+                    # Only remove from pending if position was successfully opened
+                    opened = self._open_position_from_pending(pending, current_price)
+                    if not opened:
+                        # Failed to open, keep in queue for retry
+                        still_waiting.append(pending)
 
                 else:
                     # Not enough triggers yet, keep waiting
@@ -271,6 +284,9 @@ class EntryDETEngine:
         Args:
             pending: Pending signal dict
             entry_price: Confirmed entry price
+
+        Returns:
+            bool: True if position was successfully opened, False otherwise
         """
         # Reconstruct signal with confirmed entry price
         signal = pending['raw_signal'].copy()
@@ -285,7 +301,7 @@ class EntryDETEngine:
                 self.logger.warning(
                     f"[Entry-DETE] Cannot open {signal['symbol']}: {reason}"
                 )
-                return
+                return False
 
             # Calculate position size (correct signature matching main.py)
             stop_loss = signal['stop_loss']
@@ -298,7 +314,7 @@ class EntryDETEngine:
                     f"[Entry-DETE] Position size too small for {signal['symbol']}: "
                     f"${size_usd:.2f} (min: ${min_position_size:.2f})"
                 )
-                return
+                return False
 
             # Calculate other values manually (same as main.py)
             risk_pct = self.risk_engine.get_risk_per_trade(signal.get('engine', 'standard'))
@@ -332,6 +348,7 @@ class EntryDETEngine:
                     f"[Entry-DETE] ✅ SIM position opened | symbol={signal['symbol']} | "
                     f"side={signal['side']} | entry={entry_price:.6f} | size=${size_usd:.2f}"
                 )
+                return True
             else:
                 # LIVE mode: create real order on MEXC
                 # Calculate amount in base currency (same pattern as main.py)
@@ -359,15 +376,18 @@ class EntryDETEngine:
                         f"[Entry-DETE] ✅ Position opened | symbol={signal['symbol']} | "
                         f"side={signal['side']} | entry={entry_price:.6f}"
                     )
+                    return True
                 else:
                     self.logger.error(
                         f"[Entry-DETE] 🔴 Failed to create order for {signal['symbol']}"
                     )
+                    return False
 
         except Exception as e:
             self.logger.error(f"[Entry-DETE] Error opening position: {e}")
             import traceback
-            self.logger.error(f"[Entry-DETE] Traceback: {traceback.format_exc()}")
+            self.logger.exception(e)
+            return False
 
     def get_pending_count(self):
         """Return count of pending signals (for monitoring)"""

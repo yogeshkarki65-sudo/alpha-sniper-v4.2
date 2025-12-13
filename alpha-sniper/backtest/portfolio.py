@@ -76,12 +76,19 @@ class BacktestPosition:
         # 1. Check stop loss
         if self.side == 'long' and current_price <= self.stop_loss:
             return 'Stop hit'
+        if self.side == 'short' and current_price >= self.stop_loss:
+            return 'Stop hit'
 
         # 2. Check TP levels
         if self.side == 'long':
             if current_price >= self.tp_4r:
                 return 'TP 4R hit'
             elif current_price >= self.tp_2r:
+                return 'TP 2R hit'
+        elif self.side == 'short':
+            if current_price <= self.tp_4r:
+                return 'TP 4R hit'
+            elif current_price <= self.tp_2r:
                 return 'TP 2R hit'
 
         # 3. Check trailing stop

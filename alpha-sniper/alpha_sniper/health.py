@@ -7,6 +7,7 @@ Provides:
 3. CLI healthcheck command: python -m alpha_sniper.healthcheck
 """
 import json
+import os
 import time
 import threading
 from datetime import datetime
@@ -190,8 +191,6 @@ def start_heartbeat_updater(bot_instance, interval: int = 30):
                 bot_instance.logger.debug(f"Heartbeat update failed: {e}")
 
             time.sleep(interval)
-
-    import os  # Import here to avoid circular issues
 
     _heartbeat_thread = threading.Thread(target=update_heartbeat, daemon=True)
     _heartbeat_thread.start()

@@ -172,7 +172,7 @@ class LongEngine:
         stop_loss = max(sl_atr, sl_swing)  # Use tighter stop
 
         # Enforce minimum stop distance (Fast Stop Manager safety rail)
-        min_stop_distance = current_price * config.min_stop_pct_core
+        min_stop_distance = current_price * self.config.min_stop_pct_core
         actual_stop_distance = current_price - stop_loss
         if actual_stop_distance < min_stop_distance:
             stop_loss = current_price - min_stop_distance

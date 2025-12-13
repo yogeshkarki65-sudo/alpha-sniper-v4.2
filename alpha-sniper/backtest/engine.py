@@ -200,9 +200,16 @@ class PumpBacktester:
         Returns:
             Statistics dictionary
         """
+        # Validate inputs
+        if scan_interval_minutes <= 0:
+            raise ValueError(f"scan_interval_minutes must be > 0, got {scan_interval_minutes}")
+
         # Parse timestamps
         start_ts = pd.to_datetime(start_time, utc=True)
         end_ts = pd.to_datetime(end_time, utc=True)
+
+        if end_ts <= start_ts:
+            raise ValueError(f"end_time must be after start_time: {start_ts} >= {end_ts}")
 
         self.logger.info("")
         self.logger.info("=" * 70)
@@ -267,7 +274,12 @@ class PumpBacktester:
 
             # Progress logging
             if scan_count % 100 == 0:
-                progress = (current_time - start_ts) / (end_ts - start_ts) * 100
+                # Guard against division by zero (already validated above, but defensive)
+                duration = (end_ts - start_ts).total_seconds()
+                if duration > 0:
+                    progress = (current_time - start_ts).total_seconds() / duration * 100
+                else:
+                    progress = 0.0
                 self.logger.info(
                     f"📊 Progress: {progress:.1f}% | "
                     f"Equity: ${self.portfolio.current_equity:.2f} | "
