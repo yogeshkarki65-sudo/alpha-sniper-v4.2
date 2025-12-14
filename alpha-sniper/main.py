@@ -258,6 +258,42 @@ class AlphaSniperBot:
                 else:
                     pnl_pct = ((entry_price / current_price) - 1) * 100
 
+                # Calculate unrealized R-multiple for exit logic improvements
+                risk_per_unit = abs(entry_price - stop_loss)
+                if side == 'long':
+                    unrealized_pnl_per_unit = current_price - entry_price
+                else:
+                    unrealized_pnl_per_unit = entry_price - current_price
+
+                unrealized_r = unrealized_pnl_per_unit / risk_per_unit if risk_per_unit > 0 else 0
+
+                # Exit improvement: Move stop to breakeven at +0.7R
+                if unrealized_r >= 0.7 and 'breakeven_moved_at_07r' not in position:
+                    position['breakeven_moved_at_07r'] = True
+                    position['stop_loss'] = entry_price
+                    try:
+                        self.logger.info(f"[EXIT] Breakeven activated for {symbol}: {float(unrealized_r):.2f}R")
+                    except:
+                        self.logger.info(f"[EXIT] Breakeven activated for {symbol}")
+
+                # Exit improvement: Partial TP (50%) at +2R
+                if unrealized_r >= 2.0 and 'partial_tp_taken' not in position:
+                    position['partial_tp_taken'] = True
+
+                    # Close 50% of position
+                    qty = position.get('qty', 0)
+                    partial_qty = qty * 0.5
+                    position['qty'] = qty - partial_qty  # Reduce remaining position
+
+                    # Update size_usd to reflect remaining 50%
+                    if 'size_usd' in position:
+                        position['size_usd'] = position['size_usd'] * 0.5
+
+                    try:
+                        self.logger.info(f"[EXIT] Partial TP at +2R for {symbol}: closed 50% at {float(current_price):.6f}")
+                    except:
+                        self.logger.info(f"[EXIT] Partial TP at +2R for {symbol}: closed 50%")
+
                 # Check max hold time
                 hold_time_hours = (time.time() - timestamp_open) / 3600
                 if hold_time_hours >= max_hold_hours:
@@ -336,6 +372,42 @@ class AlphaSniperBot:
                 current_price = self.exchange.get_last_price(symbol)
                 if not current_price or current_price == 0:
                     continue
+
+                # Calculate unrealized R-multiple for exit logic improvements
+                risk_per_unit = abs(entry_price - stop_loss)
+                if side == 'long':
+                    unrealized_pnl_per_unit = current_price - entry_price
+                else:
+                    unrealized_pnl_per_unit = entry_price - current_price
+
+                unrealized_r = unrealized_pnl_per_unit / risk_per_unit if risk_per_unit > 0 else 0
+
+                # Exit improvement: Move stop to breakeven at +0.7R
+                if unrealized_r >= 0.7 and 'breakeven_moved_at_07r' not in position:
+                    position['breakeven_moved_at_07r'] = True
+                    position['stop_loss'] = entry_price
+                    try:
+                        self.logger.info(f"[EXIT] Breakeven activated for {symbol}: {float(unrealized_r):.2f}R")
+                    except:
+                        self.logger.info(f"[EXIT] Breakeven activated for {symbol}")
+
+                # Exit improvement: Partial TP (50%) at +2R
+                if unrealized_r >= 2.0 and 'partial_tp_taken' not in position:
+                    position['partial_tp_taken'] = True
+
+                    # Close 50% of position
+                    qty = position.get('qty', 0)
+                    partial_qty = qty * 0.5
+                    position['qty'] = qty - partial_qty  # Reduce remaining position
+
+                    # Update size_usd to reflect remaining 50%
+                    if 'size_usd' in position:
+                        position['size_usd'] = position['size_usd'] * 0.5
+
+                    try:
+                        self.logger.info(f"[EXIT] Partial TP at +2R for {symbol}: closed 50% at {float(current_price):.6f}")
+                    except:
+                        self.logger.info(f"[EXIT] Partial TP at +2R for {symbol}: closed 50%")
 
                 # Check stop loss (FAST enforcement)
                 if side == 'long':

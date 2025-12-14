@@ -312,8 +312,8 @@ class PumpEngine:
             # AGGRESSIVE PUMP MODE: Very short hold time (minutes)
             max_hold_hours = self.config.pump_aggressive_max_hold_minutes / 60.0
         elif self.config.pump_only_mode:
-            # PUMP-ONLY MODE: Short hold time
-            max_hold_hours = self.config.pump_max_hold_hours
+            # PUMP-ONLY MODE: Extended hold time for better winners
+            max_hold_hours = 3.0
         else:
             # NORMAL MODE: Standard hold time
             max_hold_hours = 6

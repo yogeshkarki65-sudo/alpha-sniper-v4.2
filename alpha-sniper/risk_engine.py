@@ -113,6 +113,14 @@ class RiskEngine:
         self.signals_today = 0  # Track signals generated today
         self.pumps_today = 0  # Track pump signals today
 
+        # Anti-repeat cooldown: track symbols with losing trades
+        # Format: {(symbol, side): timestamp_of_loss}
+        self.cooldown_tracker = {}
+        self.cooldown_duration = 4 * 3600  # 4 hours in seconds
+
+        # Daily loss limit flag
+        self.daily_loss_limit_hit = False
+
         self.logger.info(f"💰 RiskEngine initialized | Starting equity: ${self.starting_equity:.2f}")
 
     def update_equity(self, new_equity: float):
@@ -410,7 +418,39 @@ class RiskEngine:
         Check if we can open a new position
         Returns: (can_open, reason_if_not)
         """
-        # Check daily loss limit
+        symbol = signal.get('symbol')
+        side = signal.get('side')
+
+        # Check hard daily loss limit (-2% of session equity)
+        if self.session_start_equity and self.session_start_equity > 0:
+            session_pnl_pct = self.daily_pnl / self.session_start_equity
+            if session_pnl_pct <= -0.02:  # -2% hard limit
+                if not self.daily_loss_limit_hit:
+                    try:
+                        self.logger.info(f"[RISK] Daily loss limit HIT: {float(session_pnl_pct)*100:.2f}%")
+                    except:
+                        pass
+                    self.daily_loss_limit_hit = True
+                return False, "Daily loss limit -2%"
+
+        # Check anti-repeat cooldown (symbol+side specific)
+        if symbol and side:
+            cooldown_key = (symbol, side)
+            if cooldown_key in self.cooldown_tracker:
+                cooldown_end = self.cooldown_tracker[cooldown_key]
+                now = time.time()
+                if now < cooldown_end:
+                    remaining_hours = (cooldown_end - now) / 3600
+                    try:
+                        self.logger.info(f"[RISK] Cooldown active for {symbol} {side}: {float(remaining_hours):.1f}h remaining")
+                    except:
+                        pass
+                    return False, f"Cooldown {remaining_hours:.1f}h"
+                else:
+                    # Cooldown expired, remove from tracker
+                    del self.cooldown_tracker[cooldown_key]
+
+        # Check daily loss limit (original env-based check)
         if self.config.enable_daily_loss_limit:
             daily_loss_pct = self.daily_pnl / self.starting_equity if self.starting_equity > 0 else 0
             if daily_loss_pct <= -self.config.max_daily_loss_pct:
@@ -529,6 +569,19 @@ class RiskEngine:
         # Update equity and daily PnL
         self.current_equity += pnl_usd
         self.daily_pnl += pnl_usd
+
+        # Anti-repeat cooldown: If trade lost money, block this symbol+side for 4 hours
+        if pnl_usd < 0:
+            symbol = position.get('symbol')
+            side = position.get('side')
+            if symbol and side:
+                cooldown_key = (symbol, side)
+                cooldown_end = time.time() + self.cooldown_duration
+                self.cooldown_tracker[cooldown_key] = cooldown_end
+                try:
+                    self.logger.info(f"[RISK] Cooldown activated for {symbol} {side}: 4h block after loss")
+                except:
+                    pass
 
         # Hold time
         hold_time_sec = time.time() - position['timestamp_open']
