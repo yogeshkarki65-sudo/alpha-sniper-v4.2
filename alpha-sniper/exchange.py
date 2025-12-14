@@ -597,8 +597,8 @@ class RealExchange(BaseExchange):
 
     def get_total_usdt_balance(self):
         """
-        Get total USDT balance (free + used) from MEXC spot account
-        Returns: float (total USDT balance)
+        Get total portfolio value in USDT (all assets converted to USDT)
+        Returns: float (total portfolio value in USDT)
         """
         try:
             balance = self.fetch_balance()
@@ -606,16 +606,46 @@ class RealExchange(BaseExchange):
                 self.logger.error("Failed to fetch balance from MEXC")
                 return None
 
-            # Get USDT balance (free + used)
+            # Start with USDT balance
             usdt_free = balance.get('USDT', {}).get('free', 0) or 0
             usdt_used = balance.get('USDT', {}).get('used', 0) or 0
-            total_usdt = usdt_free + usdt_used
+            total_value_usdt = usdt_free + usdt_used
 
-            self.logger.debug(f"MEXC USDT Balance: free={usdt_free:.2f}, used={usdt_used:.2f}, total={total_usdt:.2f}")
-            return total_usdt
+            # Convert all other assets to USDT
+            asset_values = []
+            for asset, asset_balance in balance.items():
+                # Skip USDT (already counted), info dict, and assets with zero balance
+                if asset == 'USDT' or asset in ['info', 'free', 'used', 'total']:
+                    continue
+
+                try:
+                    total_amount = asset_balance.get('total', 0) or 0
+                    if total_amount <= 0:
+                        continue  # Skip zero balances
+
+                    # Get current price of asset in USDT
+                    symbol = f"{asset}/USDT"
+                    ticker = self.get_ticker(symbol)
+                    if ticker:
+                        price = ticker.get('last', ticker.get('close', 0)) or 0
+                        if price > 0:
+                            asset_value_usdt = total_amount * price
+                            total_value_usdt += asset_value_usdt
+                            asset_values.append(f"{asset}={total_amount:.4f}@${price:.6f}=${asset_value_usdt:.2f}")
+                except Exception as e:
+                    self.logger.debug(f"Could not convert {asset} to USDT: {e}")
+                    continue
+
+            # Log breakdown
+            if asset_values:
+                self.logger.info(f"Portfolio breakdown: USDT=${usdt_free + usdt_used:.2f} | {' | '.join(asset_values)} | Total=${total_value_usdt:.2f}")
+            else:
+                self.logger.debug(f"MEXC Portfolio: USDT=${usdt_free + usdt_used:.2f} (100%) | Total=${total_value_usdt:.2f}")
+
+            return total_value_usdt
 
         except Exception as e:
-            self.logger.error(f"Error fetching USDT balance: {e}")
+            self.logger.error(f"Error fetching total portfolio value: {e}")
             return None
 
 
