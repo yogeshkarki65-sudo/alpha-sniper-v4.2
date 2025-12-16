@@ -302,7 +302,12 @@ class RiskEngine:
             elif abs(return_30d) <= 10 or (45 <= rsi <= 55):
                 regime = "SIDEWAYS"
             else:
-                # Default to SIDEWAYS for edge cases
+                # Default to SIDEWAYS for edge cases (log for analysis)
+                self.logger.debug(
+                    f"Regime detection fallback to SIDEWAYS: "
+                    f"price={current_price:.2f}, ema200={ema200:.2f}, "
+                    f"return_30d={return_30d:.1f}%, rsi={rsi:.1f}"
+                )
                 regime = "SIDEWAYS"
 
             # Check if regime changed

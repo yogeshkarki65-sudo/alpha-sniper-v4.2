@@ -206,8 +206,32 @@ class PumpEngine:
             if rvol >= 5.0:
                 is_new_listing = True
 
-        # Apply regime-aware thresholds (simple, no complex mode logic)
-        if is_new_listing:
+        # Apply thresholds: aggressive mode overrides regime thresholds if enabled
+        if self.config.pump_aggressive_mode:
+            # Use aggressive mode thresholds (override regime-based)
+            rvol_check = rvol >= self.config.pump_aggressive_min_rvol
+            momentum_check = momentum_1h >= self.config.pump_aggressive_min_momentum
+            volume_check = volume_24h >= self.config.pump_aggressive_min_24h_quote_volume
+            return_check = self.config.pump_aggressive_min_24h_return <= return_24h <= self.config.pump_aggressive_max_24h_return
+
+            # Additional aggressive filters (if configured)
+            if self.config.pump_aggressive_price_above_ema1m and len(df_15m) >= 15:
+                ema_1m = df_15m['close'].ewm(span=60, adjust=False).mean().iloc[-1]
+                if current_price < ema_1m:
+                    if debug_rejections is not None:
+                        debug_rejections.append(
+                            f"{symbol}: AGGRESSIVE_PRICE_BELOW_EMA1M (price={current_price:.6f} < ema1m={ema_1m:.6f})"
+                        )
+                    return None
+
+            # Volume check for aggressive mode
+            if not volume_check:
+                if debug_rejections is not None:
+                    debug_rejections.append(
+                        f"{symbol}: AGGRESSIVE_VOLUME_LOW (24h=${volume_24h:,.0f} < min=${self.config.pump_aggressive_min_24h_quote_volume:,.0f})"
+                    )
+                return None
+        elif is_new_listing:
             # Use relaxed new listing thresholds
             rvol_check = rvol >= thresholds.new_listing_min_rvol
             momentum_check = momentum_1h >= thresholds.new_listing_min_momentum

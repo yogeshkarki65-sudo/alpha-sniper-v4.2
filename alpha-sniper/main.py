@@ -762,7 +762,7 @@ class AlphaSniperBot:
 
         # Run first cycle immediately
         self.trading_cycle()
-        self.last_scan_time = time.time()  # Track scan time
+        self.last_scan_time = time.time()  # Track scan time for both elapsed calc and drift detection
 
         # Setup DFE scheduling if enabled
         if self.config.dfe_enabled:
@@ -771,12 +771,10 @@ class AlphaSniperBot:
         else:
             self.logger.info("🔧 DFE disabled - filters will not auto-adjust")
 
-        last_scan_time = time.time()
-
         while self.running:
             try:
                 current_time = time.time()
-                elapsed = current_time - last_scan_time
+                elapsed = current_time - self.last_scan_time
 
                 # Check if FAST_MODE should be auto-disabled
                 if self.config.fast_mode_enabled and self.fast_mode_start_time:
@@ -811,8 +809,7 @@ class AlphaSniperBot:
                 # Check if it's time to run next scan
                 if elapsed >= scan_interval:
                     self.trading_cycle()
-                    last_scan_time = current_time
-                    self.last_scan_time = current_time  # Track for drift detection
+                    self.last_scan_time = current_time  # Track for drift detection and next elapsed calc
                     self.drift_alert_sent = False  # Reset drift alert when scan completes
 
                 # Check scheduled tasks (DFE)
@@ -824,7 +821,7 @@ class AlphaSniperBot:
             except Exception as e:
                 self.logger.error(f"Error in scan_loop: {e}")
                 self.logger.exception(e)
-                await asyncio.sleep(5)  # Back off on error
+                await asyncio.sleep(30)  # Back off on error (30s to prevent rapid error logging)
 
     async def position_loop(self):
         """

@@ -193,8 +193,8 @@ class Config:
                 'min_24h_quote_volume': 100000,
                 'min_score': 20,
                 'min_rvol': 1.5,
-                'min_24h_return': 0.05,
-                'max_24h_return': 15.0,
+                'min_24h_return': 5.0,  # 5% (percentage format)
+                'max_24h_return': 1500.0,  # 1500% max
                 'min_momentum': 2.0,
                 'new_listing_min_rvol': 1.0,
                 'new_listing_min_score': 10,
@@ -204,31 +204,31 @@ class Config:
                 'min_24h_quote_volume': 100000,
                 'min_score': 20,
                 'min_rvol': 1.5,
-                'min_24h_return': 0.05,
-                'max_24h_return': 15.0,
+                'min_24h_return': 5.0,  # 5%
+                'max_24h_return': 1500.0,  # 1500% max
                 'min_momentum': 2.0,
                 'new_listing_min_rvol': 1.0,
                 'new_listing_min_score': 10,
                 'new_listing_min_momentum': 0.5,
             },
             'SIDEWAYS': {
-                'min_24h_quote_volume': 135000,
-                'min_score': 30,
-                'min_rvol': 1.6,
-                'min_24h_return': 0.04,
-                'max_24h_return': 12.0,
-                'min_momentum': 3.0,
+                'min_24h_quote_volume': 150000,  # Slightly higher for safety
+                'min_score': 35,  # More selective
+                'min_rvol': 1.8,  # Require stronger conviction
+                'min_24h_return': 5.0,  # 5% (in percentage format to match return_24h calculation)
+                'max_24h_return': 400.0,  # 400% max (not 1200%)
+                'min_momentum': 4.0,  # Require stronger momentum
                 'new_listing_min_rvol': 0.7,
                 'new_listing_min_score': 8,
                 'new_listing_min_momentum': 0.8,
             },
             'NEUTRAL': {  # Alias for SIDEWAYS
-                'min_24h_quote_volume': 135000,
-                'min_score': 30,
-                'min_rvol': 1.6,
-                'min_24h_return': 0.04,
-                'max_24h_return': 12.0,
-                'min_momentum': 3.0,
+                'min_24h_quote_volume': 150000,
+                'min_score': 35,
+                'min_rvol': 1.8,
+                'min_24h_return': 5.0,  # 5%
+                'max_24h_return': 400.0,  # 400% max
+                'min_momentum': 4.0,
                 'new_listing_min_rvol': 0.7,
                 'new_listing_min_score': 8,
                 'new_listing_min_momentum': 0.8,
@@ -237,8 +237,8 @@ class Config:
                 'min_24h_quote_volume': 200000,
                 'min_score': 40,
                 'min_rvol': 2.5,
-                'min_24h_return': 0.07,
-                'max_24h_return': 8.0,
+                'min_24h_return': 7.0,  # 7% (percentage format)
+                'max_24h_return': 800.0,  # 800% max
                 'min_momentum': 4.0,
                 'new_listing_min_rvol': 1.5,
                 'new_listing_min_score': 20,
@@ -248,8 +248,8 @@ class Config:
                 'min_24h_quote_volume': 300000,
                 'min_score': 50,
                 'min_rvol': 3.0,
-                'min_24h_return': 0.10,
-                'max_24h_return': 5.0,
+                'min_24h_return': 10.0,  # 10% (percentage format)
+                'max_24h_return': 500.0,  # 500% max
                 'min_momentum': 5.0,
                 'new_listing_min_rvol': 2.0,
                 'new_listing_min_score': 30,
@@ -259,8 +259,8 @@ class Config:
                 'min_24h_quote_volume': 300000,
                 'min_score': 50,
                 'min_rvol': 3.0,
-                'min_24h_return': 0.10,
-                'max_24h_return': 5.0,
+                'min_24h_return': 10.0,  # 10%
+                'max_24h_return': 500.0,  # 500% max
                 'min_momentum': 5.0,
                 'new_listing_min_rvol': 2.0,
                 'new_listing_min_score': 30,
