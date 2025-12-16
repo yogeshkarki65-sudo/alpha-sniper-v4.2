@@ -278,21 +278,33 @@ class AlphaSniperBot:
 
                 # Exit improvement: Partial TP (50%) at +2R
                 if unrealized_r >= 2.0 and 'partial_tp_taken' not in position:
-                    position['partial_tp_taken'] = True
-
-                    # Close 50% of position
                     qty = position.get('qty', 0)
                     partial_qty = qty * 0.5
-                    position['qty'] = qty - partial_qty  # Reduce remaining position
 
-                    # Update size_usd to reflect remaining 50%
+                    # Execute the partial close order (LIVE mode)
+                    if not self.config.sim_mode:
+                        try:
+                            close_side = 'sell' if side == 'long' else 'buy'
+                            order = self.exchange.create_order(
+                                symbol=symbol,
+                                type='market',
+                                side=close_side,
+                                amount=partial_qty
+                            )
+                            if not order or not order.get('id'):
+                                self.logger.error(f"[EXIT] Partial TP order failed for {symbol}")
+                                continue
+                        except Exception as e:
+                            self.logger.error(f"[EXIT] Failed to execute partial TP for {symbol}: {e}")
+                            continue
+
+                    # Mark as taken and update position tracking
+                    position['partial_tp_taken'] = True
+                    position['qty'] = qty - partial_qty
                     if 'size_usd' in position:
                         position['size_usd'] = position['size_usd'] * 0.5
 
-                    try:
-                        self.logger.info(f"[EXIT] Partial TP at +2R for {symbol}: closed 50% at {float(current_price):.6f}")
-                    except:
-                        self.logger.info(f"[EXIT] Partial TP at +2R for {symbol}: closed 50%")
+                    self.logger.info(f"[EXIT] Partial TP at +2R for {symbol}: closed 50% at {current_price:.6f}")
 
                 # Check max hold time
                 hold_time_hours = (time.time() - timestamp_open) / 3600
@@ -393,21 +405,33 @@ class AlphaSniperBot:
 
                 # Exit improvement: Partial TP (50%) at +2R
                 if unrealized_r >= 2.0 and 'partial_tp_taken' not in position:
-                    position['partial_tp_taken'] = True
-
-                    # Close 50% of position
                     qty = position.get('qty', 0)
                     partial_qty = qty * 0.5
-                    position['qty'] = qty - partial_qty  # Reduce remaining position
 
-                    # Update size_usd to reflect remaining 50%
+                    # Execute the partial close order (LIVE mode)
+                    if not self.config.sim_mode:
+                        try:
+                            close_side = 'sell' if side == 'long' else 'buy'
+                            order = self.exchange.create_order(
+                                symbol=symbol,
+                                type='market',
+                                side=close_side,
+                                amount=partial_qty
+                            )
+                            if not order or not order.get('id'):
+                                self.logger.error(f"[EXIT] Partial TP order failed for {symbol}")
+                                continue
+                        except Exception as e:
+                            self.logger.error(f"[EXIT] Failed to execute partial TP for {symbol}: {e}")
+                            continue
+
+                    # Mark as taken and update position tracking
+                    position['partial_tp_taken'] = True
+                    position['qty'] = qty - partial_qty
                     if 'size_usd' in position:
                         position['size_usd'] = position['size_usd'] * 0.5
 
-                    try:
-                        self.logger.info(f"[EXIT] Partial TP at +2R for {symbol}: closed 50% at {float(current_price):.6f}")
-                    except:
-                        self.logger.info(f"[EXIT] Partial TP at +2R for {symbol}: closed 50%")
+                    self.logger.info(f"[EXIT] Partial TP at +2R for {symbol}: closed 50% at {current_price:.6f}")
 
                 # Check stop loss (FAST enforcement)
                 if side == 'long':
