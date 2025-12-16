@@ -23,9 +23,12 @@ logs/
 # Runtime data
 positions.json
 *.json.tmp
+heartbeat.json
 
 # Environment
 .env
+*.env
+!*.env.example
 
 # OS
 .DS_Store
@@ -35,3 +38,9 @@ Thumbs.db
 build/
 dist/
 *.egg-info/
+signals/__pycache__/
+
+# Deployment secrets (never commit actual configs!)
+/etc/alpha-sniper/
+deployment/config/*.env
+.env.backup.*

@@ -1,67 +1,44 @@
 .aider*
 
+# Runtime files
+logs/
+positions.json
+*.log
+
 # Python
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Environment
+.env
+.venv
+env/
 venv/
 ENV/
-.venv
+env.bak/
+venv.bak/
 
-# Environment files
-*.env
-*.env.*
-.env.backup*
-.env.PRODUCTION_READY
-.env.live.*
-.env.my_recommendation
-.env.recommended
-
-# Logs
-logs/
-*.log
-
-# Data files
-positions.json
-trades_today.json
-*.csv
-
-# Documentation (if temporary)
-*_README.md
-*_SUMMARY.md
-*_GUIDE.md
-*_IMPLEMENTATION.md
-QUICKSTART*.md
-DEPLOYMENT.md
-DELIVERABLES.md
-CHANGES.md
-SYSTEM_DOCUMENTATION.md
-PUMP_ONLY_MODE.md
-
-# Scripts
-QUICK_DEPLOY.sh
-deploy-to-server.sh
-download_mexc_data.py
-generate_sample_data.py
-get_telegram_chat_id.py
-
-# Test files
-test_*.py
-backtest_pump.py
-
-# Build/deployment artifacts
-alpha-sniper/alpha_sniper/
-alpha-sniper/backtest/
-alpha-sniper/deployment/
-alpha-sniper/scripts/
-alpha-sniper/run.py
-alpha-sniper/Makefile
-
-# Utils (if duplicates)
-alpha-sniper/utils/dynamic_filters.py
-alpha-sniper/utils/entry_dete.py
-alpha-sniper/utils/logger_production.py
-alpha-sniper/utils/pump_trailer.py
-alpha-sniper/utils/telegram_alerts.py
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~

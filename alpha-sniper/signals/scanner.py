@@ -38,7 +38,10 @@ class Scanner:
         """
         regime = self.risk_engine.current_regime or "SIDEWAYS"
 
-        self.logger.info(f"🔍 Scanner starting | Regime: {regime}")
+        self.logger.info("")
+        self.logger.info("=" * 50)
+        self.logger.info(f"🔍 SCANNER CYCLE START | Regime: {regime}")
+        self.logger.info("=" * 50)
 
         # 1. Get universe of tradeable symbols
         universe = self._build_universe()
@@ -47,7 +50,7 @@ class Scanner:
             self.logger.warning("⚠️ No symbols in universe after filtering")
             return []
 
-        self.logger.info(f"📊 Universe size: {len(universe)} symbols after filtering")
+        self.logger.info(f"📊 Universe: {len(universe)} symbols passed filters")
 
         # 2. Fetch market data for universe
         market_data = self._fetch_market_data(universe)
@@ -58,30 +61,92 @@ class Scanner:
 
         self.logger.debug(f"📊 Market data fetched for {len(market_data)} symbols")
 
-        # 3. Run all engines
-        long_signals = self.long_engine.generate_signals(market_data, regime)
-        short_signals = self.short_engine.generate_signals(market_data, regime)
-        pump_signals = self.pump_engine.generate_signals(market_data, regime)
-        bear_micro_signals = self.bear_micro_engine.generate_signals(market_data, regime)
+        # 3. Run engines (PUMP-ONLY MODE or multi-engine)
+        # Wrap engine calls in try/except to prevent crashes from breaking scan loop
+        if self.config.pump_only_mode:
+            # PUMP-ONLY MODE: Use ONLY the pump engine
+            self.logger.info("🎯 PUMP-ONLY MODE: Using pump engine exclusively")
+            try:
+                pump_signals = self.pump_engine.generate_signals(market_data, regime)
+            except Exception as e:
+                self.logger.error(f"🔴 Pump engine crashed (non-fatal): {e}")
+                self.logger.exception(e)
+                pump_signals = []
 
-        # 4. Combine and sort signals by score
-        all_signals = long_signals + short_signals + pump_signals + bear_micro_signals
+            all_signals = pump_signals
+            long_signals = []
+            short_signals = []
+            bear_micro_signals = []
+        else:
+            # NORMAL MODE: Run all engines (each wrapped to prevent cascading failures)
+            try:
+                long_signals = self.long_engine.generate_signals(market_data, regime)
+            except Exception as e:
+                self.logger.error(f"🔴 Long engine crashed (non-fatal): {e}")
+                self.logger.exception(e)
+                long_signals = []
+
+            try:
+                short_signals = self.short_engine.generate_signals(market_data, regime)
+            except Exception as e:
+                self.logger.error(f"🔴 Short engine crashed (non-fatal): {e}")
+                self.logger.exception(e)
+                short_signals = []
+
+            try:
+                pump_signals = self.pump_engine.generate_signals(market_data, regime)
+            except Exception as e:
+                self.logger.error(f"🔴 Pump engine crashed (non-fatal): {e}")
+                self.logger.exception(e)
+                pump_signals = []
+
+            try:
+                bear_micro_signals = self.bear_micro_engine.generate_signals(market_data, regime)
+            except Exception as e:
+                self.logger.error(f"🔴 Bear micro engine crashed (non-fatal): {e}")
+                self.logger.exception(e)
+                bear_micro_signals = []
+
+            # 4. Combine and sort signals by score
+            all_signals = long_signals + short_signals + pump_signals + bear_micro_signals
+
         all_signals.sort(key=lambda x: x.get('score', 0), reverse=True)
 
         # 5. Log results
-        self.logger.info(
-            f"📡 Signals found | "
-            f"long={len(long_signals)} short={len(short_signals)} "
-            f"pump={len(pump_signals)} bear_micro={len(bear_micro_signals)} "
-            f"| Total={len(all_signals)}"
-        )
+        self.logger.info("")
+        if self.config.pump_only_mode and self.config.pump_aggressive_mode:
+            self.logger.info(
+                f"📡 Signals Generated [PUMP-AGGRESSIVE] | "
+                f"Pump: {len(pump_signals)} | "
+                f"TOTAL: {len(all_signals)}"
+            )
+        elif self.config.pump_only_mode:
+            self.logger.info(
+                f"📡 Signals Generated [PUMP-ONLY] | "
+                f"Pump: {len(pump_signals)} | "
+                f"TOTAL: {len(all_signals)}"
+            )
+        else:
+            self.logger.info(
+                f"📡 Signals Generated | "
+                f"Long: {len(long_signals)} | Short: {len(short_signals)} | "
+                f"Pump: {len(pump_signals)} | BearMicro: {len(bear_micro_signals)} | "
+                f"TOTAL: {len(all_signals)}"
+            )
 
         if all_signals:
             top_signal = all_signals[0]
             self.logger.info(
-                f"   Top signal: {top_signal['symbol']} {top_signal['engine']} "
-                f"(score={top_signal['score']})"
+                f"   🎯 Top signal: {top_signal['symbol']} | "
+                f"Engine: {top_signal['engine']} | "
+                f"Score: {top_signal['score']} | "
+                f"Side: {top_signal.get('side', 'N/A')}"
             )
+        else:
+            self.logger.info("   No signals met criteria")
+
+        self.logger.info("=" * 50)
+        self.logger.info("")
 
         return all_signals
 
@@ -122,6 +187,18 @@ class Scanner:
                 if 'BULL' in symbol or 'BEAR' in symbol or '3L' in symbol or '3S' in symbol:
                     rejected_counts['inactive'] += 1
                     continue
+
+                # Skip futures symbols (PERP contracts) - we want spot only
+                if '_PERP' in symbol or symbol.endswith('PERP') or ':' in symbol:
+                    rejected_counts['inactive'] += 1
+                    continue
+
+                # Skip if market type is explicitly 'swap' or 'future' (for SPOT-only mode)
+                if self.config.mexc_spot_enabled and not self.config.mexc_futures_enabled:
+                    market_type = market.get('type', '').lower()
+                    if market_type in ['swap', 'future', 'futures']:
+                        rejected_counts['inactive'] += 1
+                        continue
 
                 universe.append(symbol)
 
@@ -191,6 +268,13 @@ class Scanner:
                 df_15m = helpers.ohlcv_to_dataframe(ohlcv_15m)
                 df_1h = helpers.ohlcv_to_dataframe(ohlcv_1h)
 
+                # Fetch real funding rate ONLY for futures symbols (for short engine)
+                # Skip for spot symbols to prevent "contract does not exist" spam
+                funding_rate = 0
+                if '_PERP' in symbol or symbol.endswith('PERP') or ':' in symbol:
+                    # This is a futures contract, fetch funding rate
+                    funding_rate = self.exchange.get_funding_rate(symbol)
+
                 # Store data
                 market_data[symbol] = {
                     'ticker': ticker,
@@ -198,7 +282,7 @@ class Scanner:
                     'df_1h': df_1h,
                     'spread_pct': spread_pct,
                     'volume_24h': volume_24h,
-                    'funding_rate': 0,  # TODO: Fetch real funding if available
+                    'funding_rate': funding_rate,
                     'btc_performance': 0  # TODO: Calculate relative to BTC
                 }
 
@@ -207,12 +291,9 @@ class Scanner:
                 fetch_errors += 1
                 continue
 
-        self.logger.debug(
-            f"Market data fetch stats | "
-            f"fetched={len(market_data)} "
-            f"rejected_volume={rejected_volume} "
-            f"rejected_spread={rejected_spread} "
-            f"errors={fetch_errors}"
+        self.logger.info(
+            f"📊 Market data: {len(market_data)} symbols fetched | "
+            f"rejected: volume={rejected_volume} spread={rejected_spread} errors={fetch_errors}"
         )
 
         return market_data

@@ -58,6 +58,23 @@ class ShortEngine:
         if funding_rate > self.config.max_funding_8h_short:
             return None
 
+        # === UPGRADE B: Short Funding Overlay ===
+        # Only short when funding is positive enough (we get paid to short)
+        if self.config.short_funding_overlay_enabled:
+            if funding_rate < self.config.short_min_funding_8h:
+                self.logger.info(
+                    f"[ShortFundingOverlay] REJECT short | "
+                    f"symbol={symbol} | "
+                    f"funding={funding_rate:.5f} < min={self.config.short_min_funding_8h:.5f}"
+                )
+                return None
+            else:
+                self.logger.info(
+                    f"[ShortFundingOverlay] OK short | "
+                    f"symbol={symbol} | "
+                    f"funding={funding_rate:.5f} >= min={self.config.short_min_funding_8h:.5f}"
+                )
+
         # Current price
         current_price = df_15m['close'].iloc[-1]
 
@@ -135,6 +152,12 @@ class ShortEngine:
         sl_swing = swing_high * 1.005  # 0.5% above swing high
 
         stop_loss = min(sl_atr, sl_swing)  # Use tighter stop
+
+        # Enforce minimum stop distance (Fast Stop Manager safety rail)
+        min_stop_distance = current_price * self.config.min_stop_pct_core
+        actual_stop_distance = stop_loss - current_price
+        if actual_stop_distance < min_stop_distance:
+            stop_loss = current_price + min_stop_distance
 
         # TP: 2R and 4R targets (downward)
         risk_per_unit = stop_loss - current_price

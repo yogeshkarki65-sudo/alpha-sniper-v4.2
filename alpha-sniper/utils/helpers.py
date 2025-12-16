@@ -76,16 +76,35 @@ def calculate_momentum(df: pd.DataFrame, periods: int) -> float:
 def save_json_atomic(filepath: str, data: Any):
     """
     Atomically save JSON data (write to temp, then rename)
+    Creates parent directory if it doesn't exist.
+    Raises PermissionError if write fails due to permissions.
     """
+    # Ensure parent directory exists
+    parent_dir = os.path.dirname(filepath)
+    if parent_dir:
+        os.makedirs(parent_dir, exist_ok=True)
+
+    # Write to temp file in same directory, then atomic rename
     temp_path = filepath + '.tmp'
-    with open(temp_path, 'w') as f:
-        json.dump(data, f, indent=2)
-    os.replace(temp_path, filepath)
+    try:
+        with open(temp_path, 'w') as f:
+            json.dump(data, f, indent=2)
+        os.replace(temp_path, filepath)
+    except PermissionError as e:
+        # Clean up temp file if it exists
+        try:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+        except:
+            pass
+        # Re-raise PermissionError for caller to handle
+        raise PermissionError(f"Permission denied writing to {filepath}: {e}") from e
 
 
 def load_json(filepath: str, default: Any = None) -> Any:
     """
     Load JSON file with default fallback
+    Handles FileNotFoundError, JSONDecodeError, and PermissionError gracefully
     """
     try:
         with open(filepath, 'r') as f:
@@ -93,6 +112,9 @@ def load_json(filepath: str, default: Any = None) -> Any:
     except FileNotFoundError:
         return default if default is not None else []
     except json.JSONDecodeError:
+        return default if default is not None else []
+    except PermissionError:
+        # Log warning but don't crash - return default
         return default if default is not None else []
 
 
@@ -176,3 +198,49 @@ def calculate_spread_pct(bid: float, ask: float) -> float:
     if bid <= 0:
         return 999.0
     return ((ask - bid) / bid) * 100
+
+
+def log_trade_to_csv(trade_data: Dict, filepath: str = 'logs/v4_trade_scores.csv'):
+    """
+    Log a closed trade to CSV file
+    Creates file with headers if it doesn't exist
+    """
+    import csv
+
+    # Ensure logs directory exists
+    ensure_dir('logs')
+
+    # Check if file exists to determine if we need to write headers
+    file_exists = os.path.isfile(filepath)
+
+    # Define CSV columns
+    fieldnames = [
+        'timestamp_open',
+        'timestamp_close',
+        'symbol',
+        'side',
+        'regime',
+        'engine',
+        'entry_price',
+        'exit_price',
+        'size_usd',
+        'qty',
+        'initial_risk_usd',
+        'pnl_usd',
+        'pnl_pct',
+        'r_multiple',
+        'exit_reason',
+        'hold_time_hours',
+        'score'
+    ]
+
+    # Write to CSV
+    with open(filepath, 'a', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+
+        # Write header if file is new
+        if not file_exists:
+            writer.writeheader()
+
+        # Write trade data
+        writer.writerow({k: trade_data.get(k, '') for k in fieldnames})

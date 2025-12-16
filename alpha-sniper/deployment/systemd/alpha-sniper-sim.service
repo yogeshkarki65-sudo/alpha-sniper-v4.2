@@ -1,0 +1,42 @@
+[Unit]
+Description=Alpha Sniper V4.2 Trading Bot (SIMULATION MODE)
+Documentation=https://github.com/yogeshkarki65-sudo/alpha-sniper-v4.2
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=alpha-sniper
+Group=alpha-sniper
+WorkingDirectory=/opt/alpha-sniper
+
+# Environment file with configuration
+EnvironmentFile=/etc/alpha-sniper/alpha-sniper-sim.env
+
+# Execute the bot in SIM mode
+ExecStart=/opt/alpha-sniper/venv/bin/python /opt/alpha-sniper/run.py --mode sim
+
+# Restart policy
+Restart=always
+RestartSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=alpha-sniper-sim
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=true
+
+# Resource limits (optional, adjust as needed)
+MemoryMax=2G
+CPUQuota=100%
+
+# Graceful shutdown
+TimeoutStopSec=30
+KillMode=mixed
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target
