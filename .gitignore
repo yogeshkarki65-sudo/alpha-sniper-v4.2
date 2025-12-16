@@ -42,3 +42,25 @@ venv.bak/
 *.swp
 *.swo
 *~
+**/*.pyc
+**/__pycache__/
+
+# local tooling / env
+.config/
+.lesshst
+
+# python cache
+__pycache__/
+*.pyc
+
+# never commit gh auth
+.config/gh/
+
+# local creds / config
+.git-credentials
+.gitconfig
+.ssh/
+.config/
+.lesshst
+__pycache__/
+*.pyc
