@@ -131,10 +131,24 @@ class PumpEngine:
         debug_rejections=None,
     ):
         """
-        Evaluate a single symbol for pump entry using regime-aware thresholds
-
+        Evaluate whether a single symbol meets pump entry criteria for the given regime and, if so, construct a pump signal dictionary.
+        
+        Performs data validation and regime-aware gating (volume, spread, RVOL, 1h momentum, 24h return), supports aggressive-mode and new-listing overrides, computes stop loss and target prices, and determines maximum hold time. If the symbol fails any eligibility checks, returns None.
+        
+        Parameters:
+            symbol (str): Ticker symbol to evaluate.
+            data (dict): Market payload expected to contain 'ticker' (with 'quoteVolume'), 'df_15m' (DataFrame), 'df_1h' (DataFrame), and optionally 'spread_pct'.
+            regime (str): Active regime name used to select thresholds and behavior.
+            open_positions: Current open positions context (may influence decision logic; pass-through).
+            thresholds: Regime-specific thresholds object with fields used for gating and scoring.
+            debug_counts (dict, optional): Mutable counters updated for debugging phases (e.g., "after_data", "after_volume", "after_spread", "after_score", "after_core").
+            debug_rejections (list, optional): If provided, rejection reasons are appended to this list for sampling/logging.
+        
         Returns:
-            signal dict or None
+            dict or None: A signal dictionary on success containing keys
+                'symbol', 'side', 'engine', 'score', 'entry_price', 'stop_loss', 'tp_2r', 'tp_4r',
+                'rvol', 'momentum_1h', 'return_24h', 'volume_24h', 'max_hold_hours', and 'regime';
+            returns None if the symbol does not meet pump entry criteria.
         """
         # Get data
         ticker = data.get('ticker') if data else None
