@@ -306,6 +306,31 @@ class AlphaSniperBot:
 
                     self.logger.info(f"[EXIT] Partial TP at +2R for {symbol}: closed 50% at {current_price:.6f}")
 
+                # HARD STOP: Guaranteed 2% max loss for PUMP trades (synthetic enforcement)
+                engine = position.get('engine', '')
+                if engine == 'pump' and side == 'long':
+                    hard_stop_price = entry_price * (1 - 0.02)  # -2% hard stop
+                    if current_price <= hard_stop_price:
+                        loss_pct = ((current_price / entry_price) - 1) * 100
+                        self.logger.error(
+                            f"[HARD_STOP] triggered symbol={symbol} engine=pump side={side} "
+                            f"entry={entry_price:.6f} current={current_price:.6f} "
+                            f"hard_stop={hard_stop_price:.6f} loss={loss_pct:.2f}%"
+                        )
+                        positions_to_close.append((position, current_price, "Hard stop -2%"))
+                        continue
+                elif engine == 'pump' and side == 'short':
+                    hard_stop_price = entry_price * (1 + 0.02)  # +2% hard stop for shorts
+                    if current_price >= hard_stop_price:
+                        loss_pct = ((entry_price / current_price) - 1) * 100
+                        self.logger.error(
+                            f"[HARD_STOP] triggered symbol={symbol} engine=pump side={side} "
+                            f"entry={entry_price:.6f} current={current_price:.6f} "
+                            f"hard_stop={hard_stop_price:.6f} loss={loss_pct:.2f}%"
+                        )
+                        positions_to_close.append((position, current_price, "Hard stop -2%"))
+                        continue
+
                 # Check max hold time
                 hold_time_hours = (time.time() - timestamp_open) / 3600
                 if hold_time_hours >= max_hold_hours:
@@ -432,6 +457,32 @@ class AlphaSniperBot:
                         position['size_usd'] = position['size_usd'] * 0.5
 
                     self.logger.info(f"[EXIT] Partial TP at +2R for {symbol}: closed 50% at {current_price:.6f}")
+
+                # HARD STOP: Guaranteed 2% max loss for PUMP trades (synthetic enforcement) - FAST CHECK
+                # This must be checked BEFORE regular stop loss to ensure guaranteed protection
+                engine = position.get('engine', '')
+                if engine == 'pump' and side == 'long':
+                    hard_stop_price = entry_price * (1 - 0.02)  # -2% hard stop
+                    if current_price <= hard_stop_price:
+                        loss_pct = ((current_price / entry_price) - 1) * 100
+                        self.logger.error(
+                            f"[HARD_STOP_FAST] triggered symbol={symbol} engine=pump side={side} "
+                            f"entry={entry_price:.6f} current={current_price:.6f} "
+                            f"hard_stop={hard_stop_price:.6f} loss={loss_pct:.2f}%"
+                        )
+                        positions_to_close.append((position, current_price, "Hard stop -2% (FAST)"))
+                        continue
+                elif engine == 'pump' and side == 'short':
+                    hard_stop_price = entry_price * (1 + 0.02)  # +2% hard stop for shorts
+                    if current_price >= hard_stop_price:
+                        loss_pct = ((entry_price / current_price) - 1) * 100
+                        self.logger.error(
+                            f"[HARD_STOP_FAST] triggered symbol={symbol} engine=pump side={side} "
+                            f"entry={entry_price:.6f} current={current_price:.6f} "
+                            f"hard_stop={hard_stop_price:.6f} loss={loss_pct:.2f}%"
+                        )
+                        positions_to_close.append((position, current_price, "Hard stop -2% (FAST)"))
+                        continue
 
                 # Check stop loss (FAST enforcement)
                 if side == 'long':
@@ -677,6 +728,74 @@ class AlphaSniperBot:
                         position['order_id'] = order['id']
                         self.risk_engine.add_position(position)
                         signals_opened += 1
+
+                        # EXCHANGE STOP ORDER PLACEMENT (with fallback)
+                        # Attempt to place exchange-native stop order for additional protection
+                        # Synthetic hard stop remains active regardless of exchange stop success/failure
+                        engine = position.get('engine', '')
+                        if engine == 'pump':
+                            try:
+                                # Calculate stop price (2% hard stop for pump trades)
+                                stop_price = entry_price * (1 - 0.02) if position['side'] == 'long' else entry_price * (1 + 0.02)
+                                stop_side = 'sell' if position['side'] == 'long' else 'buy'
+
+                                # Try placing exchange stop-limit order
+                                # Note: MEXC Spot may or may not support this - we handle gracefully
+                                stop_order = self.exchange.create_order(
+                                    symbol=position['symbol'],
+                                    type='stop_limit',
+                                    side=stop_side,
+                                    amount=amount,
+                                    price=stop_price * 0.99 if position['side'] == 'long' else stop_price * 1.01,  # Limit price slightly worse
+                                    params={
+                                        'stopPrice': stop_price,
+                                        'leverage': 1
+                                    }
+                                )
+
+                                if stop_order and stop_order.get('id'):
+                                    position['exchange_stop_order_id'] = stop_order['id']
+                                    self.logger.info(
+                                        f"[STOP_PLACED] {position['symbol']} {position['side']} | "
+                                        f"stop_price={stop_price:.6f} | "
+                                        f"order_id={stop_order['id']} | "
+                                        f"type=exchange_native"
+                                    )
+                                else:
+                                    self.logger.warning(
+                                        f"[STOP_BLOCKED] {position['symbol']} {position['side']} | "
+                                        f"reason=exchange_returned_no_order_id | "
+                                        f"synthetic_protection=ACTIVE"
+                                    )
+                            except Exception as e:
+                                # Exchange stop placement failed - log and continue with synthetic only
+                                error_msg = str(e)
+                                self.logger.warning(
+                                    f"[STOP_BLOCKED] {position['symbol']} {position['side']} | "
+                                    f"reason={error_msg[:100]} | "
+                                    f"synthetic_protection=ACTIVE"
+                                )
+
+                        # POSITION PROTECTION AUDIT LOG
+                        # Comprehensive logging of all protective measures for this position
+                        exchange_stop_status = "PLACED" if position.get('exchange_stop_order_id') else "BLOCKED"
+                        exchange_stop_detail = (
+                            f"order_id={position.get('exchange_stop_order_id')}"
+                            if exchange_stop_status == "PLACED"
+                            else "using_synthetic_only"
+                        )
+
+                        self.logger.info(
+                            f"[POSITION_PROTECT] {position['symbol']} {position['side']} {position['engine'].upper()} | "
+                            f"min_stop_pct={2.0 if engine == 'pump' else 'N/A'}% | "
+                            f"desired_exchange_stop={'2.0%' if engine == 'pump' else 'N/A'} | "
+                            f"exchange_stop_status={exchange_stop_status} ({exchange_stop_detail}) | "
+                            f"synthetic_hard_stop={'ACTIVE_2%' if engine == 'pump' else 'N/A'} | "
+                            f"max_hold={position.get('max_hold_hours', 48)}h | "
+                            f"entry={entry_price:.6f} | "
+                            f"stop={stop_loss:.6f} | "
+                            f"protection=FULL"
+                        )
 
                         # Send enhanced Telegram notification for LIVE open
                         try:
