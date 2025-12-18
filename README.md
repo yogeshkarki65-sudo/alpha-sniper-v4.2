@@ -61,6 +61,70 @@ alpha-sniper-v4.2/
     └── requirements.txt   # Dependencies
 ```
 
+## How to Fetch CodeRabbit Report on Server
+
+CodeRabbit PR reviews can be downloaded and saved on the server for offline analysis.
+
+### Prerequisites
+
+**Option 1: Using `gh` CLI (Recommended)**
+```bash
+# Install gh CLI if not already installed
+# Ubuntu/Debian:
+sudo apt install gh
+
+# Authenticate
+gh auth login
+```
+
+**Option 2: Using GitHub API**
+```bash
+# Set your GitHub personal access token
+export GITHUB_TOKEN="ghp_your_token_here"
+```
+
+### Fetch Report
+
+```bash
+# Navigate to repository
+cd /opt/alpha-sniper
+
+# Run the fetch script
+./scripts/fetch_coderabbit_report.sh OWNER REPO PR_NUMBER
+
+# Example:
+./scripts/fetch_coderabbit_report.sh yogeshkarki65-sudo alpha-sniper-v4.2 123
+```
+
+### Output
+
+Reports are saved to `/opt/alpha-sniper/reports/coderabbit_pr_<PR>.md`
+
+```bash
+# View the report
+cat /opt/alpha-sniper/reports/coderabbit_pr_123.md
+
+# Search for CodeRabbit comments
+grep -i 'coderabbit' /opt/alpha-sniper/reports/coderabbit_pr_123.md
+
+# View with pagination
+less /opt/alpha-sniper/reports/coderabbit_pr_123.md
+```
+
+### Troubleshooting
+
+**Error: "gh: command not found"**
+- Install gh CLI or use GitHub API method with GITHUB_TOKEN
+
+**Error: "GITHUB_TOKEN environment variable not set"**
+- Create a personal access token at https://github.com/settings/tokens
+- Export it: `export GITHUB_TOKEN="ghp_..."`
+
+**No CodeRabbit comments found**
+- Verify CodeRabbit bot reviewed the PR
+- Check PR number is correct
+- Review raw report for any comments
+
 ## License
 
 MIT
