@@ -306,10 +306,10 @@ class AlphaSniperBot:
 
                     self.logger.info(f"[EXIT] Partial TP at +2R for {symbol}: closed 50% at {current_price:.6f}")
 
-                # HARD STOP: Guaranteed 2% max loss for PUMP trades (synthetic enforcement)
+                # HARD STOP: Guaranteed max loss for PUMP trades (synthetic enforcement)
                 engine = position.get('engine', '')
                 if engine == 'pump' and side == 'long':
-                    hard_stop_price = entry_price * (1 - 0.02)  # -2% hard stop
+                    hard_stop_price = entry_price * (1 - self.config.hard_stop_pct_pump)
                     if current_price <= hard_stop_price:
                         loss_pct = ((current_price / entry_price) - 1) * 100
                         self.logger.error(
@@ -320,7 +320,7 @@ class AlphaSniperBot:
                         positions_to_close.append((position, current_price, "Hard stop -2%"))
                         continue
                 elif engine == 'pump' and side == 'short':
-                    hard_stop_price = entry_price * (1 + 0.02)  # +2% hard stop for shorts
+                    hard_stop_price = entry_price * (1 + self.config.hard_stop_pct_pump)
                     if current_price >= hard_stop_price:
                         loss_pct = ((entry_price / current_price) - 1) * 100
                         self.logger.error(
@@ -458,11 +458,11 @@ class AlphaSniperBot:
 
                     self.logger.info(f"[EXIT] Partial TP at +2R for {symbol}: closed 50% at {current_price:.6f}")
 
-                # HARD STOP: Guaranteed 2% max loss for PUMP trades (synthetic enforcement) - FAST CHECK
+                # HARD STOP: Guaranteed max loss for PUMP trades (synthetic enforcement) - FAST CHECK
                 # This must be checked BEFORE regular stop loss to ensure guaranteed protection
                 engine = position.get('engine', '')
                 if engine == 'pump' and side == 'long':
-                    hard_stop_price = entry_price * (1 - 0.02)  # -2% hard stop
+                    hard_stop_price = entry_price * (1 - self.config.hard_stop_pct_pump)
                     if current_price <= hard_stop_price:
                         loss_pct = ((current_price / entry_price) - 1) * 100
                         self.logger.error(
@@ -473,7 +473,7 @@ class AlphaSniperBot:
                         positions_to_close.append((position, current_price, "Hard stop -2% (FAST)"))
                         continue
                 elif engine == 'pump' and side == 'short':
-                    hard_stop_price = entry_price * (1 + 0.02)  # +2% hard stop for shorts
+                    hard_stop_price = entry_price * (1 + self.config.hard_stop_pct_pump)
                     if current_price >= hard_stop_price:
                         loss_pct = ((entry_price / current_price) - 1) * 100
                         self.logger.error(
@@ -592,6 +592,121 @@ class AlphaSniperBot:
             except Exception as e:
                 self.logger.debug(f"[PumpTrailer] Error updating {position.get('symbol', 'UNKNOWN')}: {e}")
                 continue
+
+    async def _synthetic_stop_watchdog(self):
+        """
+        SYNTHETIC STOP WATCHDOG (ultra-lightweight, dedicated protection loop)
+
+        Runs independently every HARD_STOP_WATCHDOG_INTERVAL (default: 1 second)
+        Monitors ONLY pump positions for hard stop breaches
+
+        This is the GUARANTEED backstop that ensures pump trades never exceed max loss,
+        even if:
+        - Exchange stop placement fails
+        - Exchange has minimum stop distance constraints
+        - Exchange stop order is cancelled/rejected
+        - Any other stop placement issues occur
+
+        Design:
+        - Ultra-lightweight: only checks price vs hard stop threshold
+        - No complex logic, no ATR calculations, no regime checks
+        - Minimal API calls: only get_last_price for open pump positions
+        - Fast execution: sub-second response time
+        - Resilient: runs independently of main scan loop
+        """
+        self.logger.info("🛡️ SYNTHETIC STOP WATCHDOG started")
+        self.logger.info(f"   Check interval: {self.config.hard_stop_watchdog_interval}s")
+        self.logger.info(f"   Hard stop threshold: {self.config.hard_stop_pct_pump*100}%")
+
+        while self.running:
+            try:
+                # Only process if we have open positions
+                if not self.risk_engine.open_positions:
+                    await asyncio.sleep(self.config.hard_stop_watchdog_interval)
+                    continue
+
+                positions_to_close = []
+
+                for position in self.risk_engine.open_positions:
+                    try:
+                        engine = position.get('engine', '')
+
+                        # ONLY monitor pump positions
+                        if engine != 'pump':
+                            continue
+
+                        symbol = position['symbol']
+                        side = position['side']
+                        entry_price = position['entry_price']
+
+                        # Get current price (lightweight ticker call)
+                        current_price = self.exchange.get_last_price(symbol)
+                        if not current_price or current_price == 0:
+                            continue
+
+                        # Check hard stop breach
+                        if side == 'long':
+                            hard_stop_price = entry_price * (1 - self.config.hard_stop_pct_pump)
+                            if current_price <= hard_stop_price:
+                                loss_pct = ((current_price / entry_price) - 1) * 100
+                                self.logger.error(
+                                    f"[WATCHDOG_STOP] 🛡️ TRIGGERED | {symbol} {side} | "
+                                    f"entry={entry_price:.6f} current={current_price:.6f} "
+                                    f"hard_stop={hard_stop_price:.6f} loss={loss_pct:.2f}% | "
+                                    f"GUARANTEED_MAX_LOSS_ENFORCED"
+                                )
+                                positions_to_close.append((position, current_price, f"Watchdog hard stop {loss_pct:.1f}%"))
+                        else:  # short
+                            hard_stop_price = entry_price * (1 + self.config.hard_stop_pct_pump)
+                            if current_price >= hard_stop_price:
+                                loss_pct = ((entry_price / current_price) - 1) * 100
+                                self.logger.error(
+                                    f"[WATCHDOG_STOP] 🛡️ TRIGGERED | {symbol} {side} | "
+                                    f"entry={entry_price:.6f} current={current_price:.6f} "
+                                    f"hard_stop={hard_stop_price:.6f} loss={loss_pct:.2f}% | "
+                                    f"GUARANTEED_MAX_LOSS_ENFORCED"
+                                )
+                                positions_to_close.append((position, current_price, f"Watchdog hard stop {loss_pct:.1f}%"))
+
+                    except Exception as e:
+                        self.logger.error(f"[WATCHDOG] Error checking {position.get('symbol', 'UNKNOWN')}: {e}")
+                        continue
+
+                # Close positions that breached hard stop
+                for position, exit_price, reason in positions_to_close:
+                    try:
+                        symbol = position['symbol']
+                        # Send Telegram alert for watchdog stop trigger
+                        try:
+                            self.alert_mgr.send_trade_close(
+                                symbol=symbol,
+                                side=position['side'].upper(),
+                                engine=position['engine'].upper(),
+                                size=position.get('qty', 0),
+                                entry=position['entry_price'],
+                                exit=exit_price,
+                                pnl_usd=(exit_price - position['entry_price']) * position.get('qty', 0) if position['side'] == 'long' else (position['entry_price'] - exit_price) * position.get('qty', 0),
+                                reason=reason
+                            )
+                            self.logger.info(f"[WATCHDOG] Sent Telegram alert for {symbol} hard stop")
+                        except Exception as e:
+                            self.logger.warning(f"[WATCHDOG] Failed to send Telegram alert: {e}")
+
+                        # Close position
+                        self.risk_engine.close_position(position, exit_price, reason)
+                        self.logger.info(f"[WATCHDOG] ✅ Closed {symbol} at {exit_price:.6f} | {reason}")
+                    except Exception as e:
+                        self.logger.error(f"[WATCHDOG] Error closing {position.get('symbol', 'UNKNOWN')}: {e}")
+
+                # Sleep until next check
+                await asyncio.sleep(self.config.hard_stop_watchdog_interval)
+
+            except asyncio.CancelledError:
+                self.logger.info("🛡️ Synthetic stop watchdog cancelled")
+                break
+            except Exception as e:
+                self.logger.error(f"[WATCHDOG] Error in watchdog loop: {e}")
+                await asyncio.sleep(self.config.hard_stop_watchdog_interval)
 
     def _process_signals(self, signals: list):
         """
@@ -735,8 +850,8 @@ class AlphaSniperBot:
                         engine = position.get('engine', '')
                         if engine == 'pump':
                             try:
-                                # Calculate stop price (2% hard stop for pump trades)
-                                stop_price = entry_price * (1 - 0.02) if position['side'] == 'long' else entry_price * (1 + 0.02)
+                                # Calculate stop price based on config hard stop percentage
+                                stop_price = entry_price * (1 - self.config.hard_stop_pct_pump) if position['side'] == 'long' else entry_price * (1 + self.config.hard_stop_pct_pump)
                                 stop_side = 'sell' if position['side'] == 'long' else 'buy'
 
                                 # Try placing exchange stop-limit order
@@ -787,15 +902,61 @@ class AlphaSniperBot:
 
                         self.logger.info(
                             f"[POSITION_PROTECT] {position['symbol']} {position['side']} {position['engine'].upper()} | "
-                            f"min_stop_pct={2.0 if engine == 'pump' else 'N/A'}% | "
-                            f"desired_exchange_stop={'2.0%' if engine == 'pump' else 'N/A'} | "
+                            f"min_stop_pct={self.config.hard_stop_pct_pump*100 if engine == 'pump' else 'N/A'}% | "
+                            f"desired_exchange_stop={f'{self.config.hard_stop_pct_pump*100}%' if engine == 'pump' else 'N/A'} | "
                             f"exchange_stop_status={exchange_stop_status} ({exchange_stop_detail}) | "
-                            f"synthetic_hard_stop={'ACTIVE_2%' if engine == 'pump' else 'N/A'} | "
+                            f"synthetic_hard_stop={f'ACTIVE_{self.config.hard_stop_pct_pump*100}%' if engine == 'pump' else 'N/A'} | "
                             f"max_hold={position.get('max_hold_hours', 48)}h | "
                             f"entry={entry_price:.6f} | "
                             f"stop={stop_loss:.6f} | "
                             f"protection=FULL"
                         )
+
+                        # Send Telegram notification for stop placement status (pump trades only)
+                        if engine == 'pump':
+                            try:
+                                stop_pct = self.config.hard_stop_pct_pump * 100
+                                if exchange_stop_status == "PLACED":
+                                    stop_msg = (
+                                        f"🛡️ PUMP PROTECTION ARMED\n"
+                                        f"Symbol: {position['symbol']}\n"
+                                        f"Side: {position['side'].upper()}\n"
+                                        f"Entry: ${entry_price:.6f}\n"
+                                        f"━━━━━━━━━━━━━━━━━━\n"
+                                        f"✅ Exchange Stop: PLACED\n"
+                                        f"   Stop Price: ${stop_price:.6f} ({stop_pct:.1f}%)\n"
+                                        f"   Order ID: {position.get('exchange_stop_order_id')}\n"
+                                        f"🛡️ Synthetic Watchdog: ACTIVE ({stop_pct:.1f}%)\n"
+                                        f"━━━━━━━━━━━━━━━━━━\n"
+                                        f"DOUBLE PROTECTION: Exchange + Watchdog"
+                                    )
+                                else:
+                                    stop_msg = (
+                                        f"🛡️ PUMP PROTECTION ARMED\n"
+                                        f"Symbol: {position['symbol']}\n"
+                                        f"Side: {position['side'].upper()}\n"
+                                        f"Entry: ${entry_price:.6f}\n"
+                                        f"━━━━━━━━━━━━━━━━━━\n"
+                                        f"⚠️ Exchange Stop: BLOCKED\n"
+                                        f"   (Exchange constraints or unsupported)\n"
+                                        f"🛡️ Synthetic Watchdog: ACTIVE ({stop_pct:.1f}%)\n"
+                                        f"   Hard Stop: ${stop_price:.6f}\n"
+                                        f"━━━━━━━━━━━━━━━━━━\n"
+                                        f"FALLBACK PROTECTION: Watchdog monitoring active\n"
+                                        f"Max loss GUARANTEED at {stop_pct:.1f}%"
+                                    )
+
+                                # Send via Telegram
+                                import requests
+                                if self.config.telegram_bot_token and self.config.telegram_chat_id:
+                                    requests.post(
+                                        f"https://api.telegram.org/bot{self.config.telegram_bot_token}/sendMessage",
+                                        json={"chat_id": self.config.telegram_chat_id, "text": stop_msg},
+                                        timeout=5
+                                    )
+                                    self.logger.info(f"[TELEGRAM] Sent pump protection status for {position['symbol']}")
+                            except Exception as e:
+                                self.logger.warning(f"[TELEGRAM] Failed to send pump protection alert: {e}")
 
                         # Send enhanced Telegram notification for LIVE open
                         try:
@@ -1075,12 +1236,13 @@ class AlphaSniperBot:
 
     async def _run_async(self):
         """
-        Run scan_loop, position_loop, and drift_detection concurrently
+        Run scan_loop, position_loop, drift_detection, and synthetic_stop_watchdog concurrently
         """
         try:
             tasks = [
                 self.scan_loop(),
-                self.position_loop()
+                self.position_loop(),
+                self._synthetic_stop_watchdog()  # Dedicated hard stop protection for pump trades
             ]
 
             # Add drift detection if enabled

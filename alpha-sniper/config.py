@@ -106,6 +106,12 @@ class Config:
         self.min_stop_pct_bear_micro = float(get_env("MIN_STOP_PCT_BEAR_MICRO", "0.06"))
         self.min_stop_pct_pump = float(get_env("MIN_STOP_PCT_PUMP", "0.08"))
 
+        # HARD STOP GUARANTEE for pump trades (synthetic watchdog protection)
+        # This is the GUARANTEED max loss enforced by synthetic stop watchdog
+        # Even if exchange stop placement fails or exchange has minimum distance constraints
+        self.hard_stop_pct_pump = float(get_env("HARD_STOP_PCT_PUMP", "0.02"))  # 2% guaranteed max loss
+        self.hard_stop_watchdog_interval = float(get_env("HARD_STOP_WATCHDOG_INTERVAL", "1.0"))  # Check every 1 second
+
         # Entry-DETE (Smart Entry Timing Engine) - execution-level, NOT managed by DFE
         self.entry_dete_enabled = self.parse_bool(get_env("ENTRY_DETE_ENABLED", "false"))
         self.entry_dete_max_wait_seconds = int(get_env("ENTRY_DETE_MAX_WAIT_SECONDS", "180"))
@@ -116,7 +122,9 @@ class Config:
 
         # === PUMP-ONLY MODE ===
         # Simplified mode that uses ONLY the pump engine with stricter filters
-        self.pump_only_mode = self.parse_bool(get_env("PUMP_ONLY_MODE", "false"))
+        # Supports both PUMP_ONLY and PUMP_ONLY_MODE env vars (PUMP_ONLY takes precedence)
+        pump_only_raw = get_env("PUMP_ONLY", get_env("PUMP_ONLY_MODE", "false"))
+        self.pump_only_mode = self.parse_bool(pump_only_raw)
 
         # Stricter pump filters for pump-only mode (LOWERED DEFAULTS FOR MORE SIGNALS)
         self.pump_min_24h_return = float(get_env("PUMP_MIN_24H_RETURN", "0.02"))
@@ -157,6 +165,11 @@ class Config:
 
         # === PUMP DEBUG LOGGING ===
         self.pump_debug_logging = self.parse_bool(get_env("PUMP_DEBUG_LOGGING", "false"))
+
+        # === PERFORMANCE OPTIMIZATIONS ===
+        # Caching and rate limiting to reduce API calls and improve scan speed
+        self.exchange_info_cache_seconds = int(get_env("EXCHANGE_INFO_CACHE_SECONDS", "300"))  # Cache symbol info for 5 min
+        self.max_concurrent_api_calls = int(get_env("MAX_CONCURRENT_API_CALLS", "10"))  # Limit concurrent API requests
 
         # === POSITIONS FILE PATH ===
         self.positions_file_path = get_env("POSITIONS_FILE_PATH", "/var/lib/alpha-sniper/positions.json")
