@@ -313,22 +313,22 @@ class AlphaSniperBot:
                     if current_price <= hard_stop_price:
                         loss_pct = ((current_price / entry_price) - 1) * 100
                         self.logger.error(
-                            f"[HARD_STOP] triggered symbol={symbol} engine=pump side={side} "
+                            f"[PUMP_MAX_LOSS] triggered symbol={symbol} engine=pump side={side} "
                             f"entry={entry_price:.6f} current={current_price:.6f} "
                             f"hard_stop={hard_stop_price:.6f} loss={loss_pct:.2f}%"
                         )
-                        positions_to_close.append((position, current_price, "Hard stop -2%"))
+                        positions_to_close.append((position, current_price, f"Pump max loss {self.config.pump_max_loss_pct*100:.1f}%"))
                         continue
                 elif engine == 'pump' and side == 'short':
                     hard_stop_price = entry_price * (1 + self.config.pump_max_loss_pct)
                     if current_price >= hard_stop_price:
                         loss_pct = ((entry_price / current_price) - 1) * 100
                         self.logger.error(
-                            f"[HARD_STOP] triggered symbol={symbol} engine=pump side={side} "
+                            f"[PUMP_MAX_LOSS] triggered symbol={symbol} engine=pump side={side} "
                             f"entry={entry_price:.6f} current={current_price:.6f} "
                             f"hard_stop={hard_stop_price:.6f} loss={loss_pct:.2f}%"
                         )
-                        positions_to_close.append((position, current_price, "Hard stop -2%"))
+                        positions_to_close.append((position, current_price, f"Pump max loss {self.config.pump_max_loss_pct*100:.1f}%"))
                         continue
 
                 # Check max hold time
@@ -466,22 +466,22 @@ class AlphaSniperBot:
                     if current_price <= hard_stop_price:
                         loss_pct = ((current_price / entry_price) - 1) * 100
                         self.logger.error(
-                            f"[HARD_STOP_FAST] triggered symbol={symbol} engine=pump side={side} "
+                            f"[PUMP_MAX_LOSS_FAST] triggered symbol={symbol} engine=pump side={side} "
                             f"entry={entry_price:.6f} current={current_price:.6f} "
                             f"hard_stop={hard_stop_price:.6f} loss={loss_pct:.2f}%"
                         )
-                        positions_to_close.append((position, current_price, "Hard stop -2% (FAST)"))
+                        positions_to_close.append((position, current_price, f"Pump max loss {self.config.pump_max_loss_pct*100:.1f}% (FAST)"))
                         continue
                 elif engine == 'pump' and side == 'short':
                     hard_stop_price = entry_price * (1 + self.config.pump_max_loss_pct)
                     if current_price >= hard_stop_price:
                         loss_pct = ((entry_price / current_price) - 1) * 100
                         self.logger.error(
-                            f"[HARD_STOP_FAST] triggered symbol={symbol} engine=pump side={side} "
+                            f"[PUMP_MAX_LOSS_FAST] triggered symbol={symbol} engine=pump side={side} "
                             f"entry={entry_price:.6f} current={current_price:.6f} "
                             f"hard_stop={hard_stop_price:.6f} loss={loss_pct:.2f}%"
                         )
-                        positions_to_close.append((position, current_price, "Hard stop -2% (FAST)"))
+                        positions_to_close.append((position, current_price, f"Pump max loss {self.config.pump_max_loss_pct*100:.1f}% (FAST)"))
                         continue
 
                 # Check stop loss (FAST enforcement)
@@ -597,8 +597,8 @@ class AlphaSniperBot:
         """
         SYNTHETIC STOP WATCHDOG (ultra-lightweight, dedicated protection loop)
 
-        Runs independently every HARD_STOP_WATCHDOG_INTERVAL (default: 1 second)
-        Monitors ONLY pump positions for hard stop breaches
+        Runs independently every PUMP_MAX_LOSS_WATCHDOG_INTERVAL (default: 1 second)
+        Monitors ONLY pump positions for max loss breaches
 
         This is the GUARANTEED backstop that ensures pump trades never exceed max loss,
         even if:
