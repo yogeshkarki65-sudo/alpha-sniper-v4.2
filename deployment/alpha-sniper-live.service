@@ -1,0 +1,51 @@
+[Unit]
+Description=Alpha Sniper V4.2 Trading Bot (LIVE TRADING - REAL MONEY!)
+After=network.target network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/alpha-sniper
+EnvironmentFile=/etc/alpha-sniper/alpha-sniper-live.env
+
+# Permissive file creation (allows temp files and logs)
+UMask=0000
+
+# Pre-execution: Create directories and set permissions
+ExecStartPre=/bin/mkdir -p /var/lib/alpha-sniper
+ExecStartPre=/bin/mkdir -p /opt/alpha-sniper/logs
+ExecStartPre=/bin/mkdir -p /opt/alpha-sniper/reports
+ExecStartPre=/bin/chmod 777 /var/lib/alpha-sniper
+ExecStartPre=/bin/chmod 775 /opt/alpha-sniper/logs
+ExecStartPre=/bin/chmod 775 /opt/alpha-sniper/reports
+ExecStartPre=/bin/chown -R ubuntu:ubuntu /var/lib/alpha-sniper
+ExecStartPre=/bin/chown -R ubuntu:ubuntu /opt/alpha-sniper/logs
+ExecStartPre=/bin/chown -R ubuntu:ubuntu /opt/alpha-sniper/reports
+
+ExecStart=/opt/alpha-sniper/venv/bin/python /opt/alpha-sniper/alpha-sniper/main.py
+
+Restart=on-failure
+RestartSec=15
+StartLimitInterval=600
+StartLimitBurst=5
+
+StandardOutput=journal
+StandardError=journal
+
+# Writeable paths (CRITICAL: allows creating temp files and logs)
+ReadWritePaths=/var/lib/alpha-sniper
+ReadWritePaths=/opt/alpha-sniper/logs
+ReadWritePaths=/opt/alpha-sniper/reports
+ReadWritePaths=/opt/alpha-sniper/alpha-sniper/__pycache__
+
+# Resource limits
+MemoryMax=2G
+TimeoutStopSec=30
+
+# Python settings
+Environment="PYTHONUNBUFFERED=1"
+
+[Install]
+WantedBy=multi-user.target
