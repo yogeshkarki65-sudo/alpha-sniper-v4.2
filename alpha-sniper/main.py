@@ -178,13 +178,60 @@ class AlphaSniperBot:
             self._manage_positions()
 
             # 4. Run scanner to get signals
+            scan_start_time = time.time()
             signals = self.scanner.scan()
+            scan_duration_ms = (time.time() - scan_start_time) * 1000
+
+            # Send scan summary (if enabled)
+            try:
+                # Get enabled engines
+                enabled_engines = []
+                if self.config.enable_pump:
+                    enabled_engines.append('PUMP')
+                if self.config.enable_long:
+                    enabled_engines.append('LONG')
+                if self.config.enable_short:
+                    enabled_engines.append('SHORT')
+                if self.config.enable_bear_micro:
+                    enabled_engines.append('BEAR_MICRO')
+
+                # Get top signals
+                top_signals = []
+                if signals:
+                    sorted_signals = sorted(signals, key=lambda x: x.get('score', 0), reverse=True)
+                    top_signals = [(s['symbol'], s.get('engine', 'unknown').upper(), f"{s.get('score', 0):.2f}")
+                                   for s in sorted_signals[:3]]
+
+                # Get universe count (estimate from config or default)
+                universe_count = getattr(self.config, 'scan_universe_max', 800)
+
+                self.alert_mgr.send_scan_summary(
+                    regime=new_regime,
+                    enabled_engines=enabled_engines,
+                    universe_count=universe_count,
+                    signals_count=len(signals) if signals else 0,
+                    top_signals=top_signals,
+                    scan_time_ms=scan_duration_ms
+                )
+            except Exception as e:
+                self.logger.debug(f"Failed to send scan summary: {e}")
 
             # 5. Process new signals
+            signals_opened_count = 0
             if signals:
-                self._process_signals(signals)
+                signals_opened_count = self._process_signals(signals)
             else:
                 self.logger.info("📊 No signals to process")
+
+            # Send "why no trade" if signals existed but none were opened
+            if signals and signals_opened_count == 0:
+                try:
+                    reasons = []
+                    reasons.append(f"{len(signals)} signals generated but none passed risk checks")
+                    reasons.append("Possible reasons: max positions reached, insufficient equity, cooldown active")
+                    self.alert_mgr.send_why_no_trade(regime=new_regime, reasons=reasons)
+                except Exception as e:
+                    self.logger.debug(f"Failed to send why-no-trade message: {e}")
 
             # 6. Save positions
             self.risk_engine.save_positions(self.config.positions_file_path)
@@ -998,6 +1045,8 @@ class AlphaSniperBot:
             self.logger.info(f"✅ Opened {signals_opened} new position(s)")
         if signals_opened == 0 and signals_queued == 0:
             self.logger.info("📊 No new positions opened or queued")
+
+        return signals_opened
 
     def _log_cycle_summary(self):
         """

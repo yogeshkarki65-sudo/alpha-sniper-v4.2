@@ -539,6 +539,45 @@ class RiskEngine:
         self.open_positions.append(position)
         self.logger.info(f"✅ Position opened | {position['symbol']} {position['side']} | size=${position.get('size_usd', 0):.2f}")
 
+        # Send Telegram notification for trade open
+        try:
+            if self.alert_mgr:
+                # Calculate R multiple for display
+                entry_price = position.get('entry_price', 0)
+                stop_loss = position.get('stop_loss', 0)
+                target = position.get('target', None)
+
+                # Calculate expected R multiple
+                r_multiple = None
+                if entry_price > 0 and stop_loss > 0 and target:
+                    side = position.get('side', 'long')
+                    if side == 'long':
+                        risk_dist = entry_price - stop_loss
+                        reward_dist = target - entry_price
+                    else:
+                        risk_dist = stop_loss - entry_price
+                        reward_dist = entry_price - target
+
+                    if risk_dist > 0:
+                        r_multiple = reward_dist / risk_dist
+
+                self.alert_mgr.send_trade_open(
+                    symbol=position['symbol'],
+                    side=position['side'].upper(),
+                    engine=position.get('engine', 'unknown').upper(),
+                    regime=position.get('regime', 'unknown'),
+                    size=position.get('qty', 0),
+                    entry=position['entry_price'],
+                    stop=position['stop_loss'],
+                    target=position.get('target'),
+                    leverage=1.0,  # Spot trading, no leverage
+                    risk_pct=(position.get('initial_risk_usd', 0) / self.current_equity * 100) if self.current_equity > 0 else 0,
+                    r_multiple=r_multiple
+                )
+                self.logger.info(f"[TELEGRAM] Sent trade open notification for {position['symbol']}")
+        except Exception as e:
+            self.logger.warning(f"[TELEGRAM] Failed to send trade open notification: {e}")
+
     def close_position(self, position: Dict, exit_price: float, reason: str):
         """
         Close a position and update PnL
