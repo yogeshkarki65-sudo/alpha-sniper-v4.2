@@ -382,3 +382,205 @@ class TelegramAlertManager:
             current_drawdown = ((current_equity - self.day_start_equity) / self.day_start_equity * 100)
             if current_drawdown < 0:  # Negative = drawdown
                 self.daily_max_drawdown = min(self.daily_max_drawdown, current_drawdown)
+
+    def send_scan_summary(self, regime: str, enabled_engines: list, universe_count: int,
+                         signals_count: int, top_signals: list = None, scan_time_ms: float = 0):
+        """
+        Send scan cycle start summary
+
+        Args:
+            regime: Current market regime
+            enabled_engines: List of enabled engine names
+            universe_count: Number of symbols scanned
+            signals_count: Total signals generated
+            top_signals: List of top 3 signals [(symbol, engine, score), ...]
+            scan_time_ms: Scan duration in milliseconds
+        """
+        if not getattr(self.config, 'telegram_scan_summary', True):
+            return  # Disabled
+
+        engines_str = ', '.join(enabled_engines) if enabled_engines else 'None'
+
+        msg = (
+            f"🔍 <b>Scan Cycle Complete</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"<b>Regime:</b> {regime}\n"
+            f"<b>Enabled Engines:</b> {engines_str}\n"
+            f"<b>Universe:</b> {universe_count} symbols\n"
+            f"<b>Signals:</b> {signals_count} total\n"
+        )
+
+        if scan_time_ms > 0:
+            msg += f"<b>Scan Time:</b> {scan_time_ms:.0f}ms\n"
+
+        if top_signals and len(top_signals) > 0:
+            msg += f"\n<b>Top Signals:</b>\n"
+            for symbol, engine, score in top_signals[:3]:
+                msg += f"  • {symbol} ({engine}) - {score}\n"
+        elif signals_count == 0:
+            msg += f"\n<i>No signals above threshold</i>\n"
+
+        msg += f"\n🕐 {datetime.now(timezone.utc).strftime('%H:%M:%S UTC')}"
+
+        self.telegram.send(msg, description="Scan Summary")
+
+    def send_why_no_trade(self, regime: str, reasons: list):
+        """
+        Send explanation why no trade was taken
+
+        Args:
+            regime: Current market regime
+            reasons: List of reasons (strings)
+        """
+        if not getattr(self.config, 'telegram_why_no_trade', True):
+            return  # Disabled
+
+        msg = (
+            f"❓ <b>Why No Trade?</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"<b>Regime:</b> {regime}\n"
+            f"\n<b>Reasons:</b>\n"
+        )
+
+        for reason in reasons:
+            msg += f"  • {reason}\n"
+
+        msg += f"\n🕐 {datetime.now(timezone.utc).strftime('%H:%M:%S UTC')}"
+
+        self.telegram.send(msg, description="Why No Trade")
+
+    def send_position_entry_detailed(self, symbol: str, side: str, engine: str, regime: str,
+                                    score: float, entry_price: float, qty: float, size_usd: float,
+                                    stop_price: float, virtual_max_loss_pct: float,
+                                    min_stop_pct: float, max_hold_hours: float,
+                                    triggers: dict = None, liquidity_info: dict = None):
+        """
+        Send detailed position entry notification with full context
+
+        Args:
+            symbol: Trading symbol
+            side: 'LONG' or 'SHORT'
+            engine: Signal engine name
+            regime: Market regime
+            score: Signal score
+            entry_price: Entry price
+            qty: Position quantity
+            size_usd: Position size in USD
+            stop_price: Stop loss price
+            virtual_max_loss_pct: Virtual max loss percentage (e.g., 0.02 for 2%)
+            min_stop_pct: Minimum stop percentage
+            max_hold_hours: Maximum hold time in hours
+            triggers: Optional dict with trigger info (baseline, dip_pct, etc.)
+            liquidity_info: Optional dict with liquidity scaling info
+        """
+        if not getattr(self.config, 'telegram_trade_alerts', True):
+            return  # Disabled
+
+        stop_pct = abs((stop_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
+
+        msg = (
+            f"{'🟢' if side == 'LONG' else '🔴'} <b>POSITION OPENED</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"<b>Symbol:</b> {symbol}\n"
+            f"<b>Side:</b> {side}\n"
+            f"<b>Engine:</b> {engine.upper()}\n"
+            f"<b>Score:</b> {score:.1f}\n"
+            f"<b>Regime:</b> {regime}\n"
+            f"\n"
+            f"<b>Entry:</b> ${entry_price:.6f}\n"
+            f"<b>Quantity:</b> {qty:.4f}\n"
+            f"<b>Size:</b> ${size_usd:.2f}\n"
+            f"\n"
+            f"<b>Stop Loss:</b> ${stop_price:.6f} ({stop_pct:.2f}%)\n"
+            f"<b>Virtual Max Loss:</b> {virtual_max_loss_pct*100:.1f}%\n"
+            f"<b>Min Stop:</b> {min_stop_pct*100:.1f}%\n"
+            f"<b>Max Hold:</b> {max_hold_hours:.0f}h\n"
+        )
+
+        if triggers:
+            msg += f"\n<b>Triggers:</b>\n"
+            if 'baseline' in triggers:
+                msg += f"  • Baseline: ${triggers['baseline']:.6f}\n"
+            if 'dip_pct' in triggers:
+                msg += f"  • Dip: {triggers['dip_pct']:.2f}%\n"
+
+        if liquidity_info:
+            requested = liquidity_info.get('requested_usd', size_usd)
+            adjusted = liquidity_info.get('adjusted_usd', size_usd)
+            if requested != adjusted:
+                scaling_pct = (adjusted / requested * 100) if requested > 0 else 100
+                msg += f"\n<b>Liquidity Scaling:</b>\n"
+                msg += f"  • Requested: ${requested:.2f}\n"
+                msg += f"  • Adjusted: ${adjusted:.2f} ({scaling_pct:.0f}%)\n"
+                if 'reason' in liquidity_info:
+                    msg += f"  • Reason: {liquidity_info['reason']}\n"
+
+        msg += f"\n🕐 {datetime.now(timezone.utc).strftime('%H:%M:%S UTC')}"
+
+        # Truncate if too long
+        max_len = getattr(self.config, 'telegram_max_msg_len', 3500)
+        if len(msg) > max_len:
+            msg = msg[:max_len-20] + "\n...(truncated)"
+
+        self.telegram.send(msg, description=f"Entry: {symbol}")
+
+    def send_position_exit_detailed(self, symbol: str, side: str, engine: str,
+                                   entry_price: float, exit_price: float,
+                                   qty: float, pnl_usd: float, pnl_pct: float,
+                                   hold_time_hours: float, reason: str,
+                                   trigger_details: dict = None):
+        """
+        Send detailed position exit notification
+
+        Args:
+            symbol: Trading symbol
+            side: 'LONG' or 'SHORT'
+            engine: Signal engine name
+            entry_price: Entry price
+            exit_price: Exit price
+            qty: Position quantity
+            pnl_usd: Realized PnL in USD
+            pnl_pct: Realized PnL percentage
+            hold_time_hours: Hold time in hours
+            reason: Exit reason
+            trigger_details: Optional dict with trigger thresholds
+        """
+        if not getattr(self.config, 'telegram_trade_alerts', True):
+            return  # Disabled
+
+        is_profit = pnl_usd >= 0
+        emoji = "💰" if is_profit else "📉"
+
+        msg = (
+            f"{emoji} <b>POSITION CLOSED</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"<b>Symbol:</b> {symbol}\n"
+            f"<b>Side:</b> {side}\n"
+            f"<b>Engine:</b> {engine.upper()}\n"
+            f"\n"
+            f"<b>Entry:</b> ${entry_price:.6f}\n"
+            f"<b>Exit:</b> ${exit_price:.6f}\n"
+            f"<b>Quantity:</b> {qty:.4f}\n"
+            f"\n"
+            f"<b>PnL:</b> ${pnl_usd:+.2f} ({pnl_pct:+.2f}%)\n"
+            f"<b>Hold Time:</b> {hold_time_hours:.1f}h\n"
+            f"<b>Reason:</b> {reason}\n"
+        )
+
+        if trigger_details:
+            msg += f"\n<b>Trigger Details:</b>\n"
+            for key, value in trigger_details.items():
+                msg += f"  • {key}: {value}\n"
+
+        msg += f"\n🕐 {datetime.now(timezone.utc).strftime('%H:%M:%S UTC')}"
+
+        # Update daily stats
+        self.daily_trades += 1
+        self.daily_pnl += pnl_usd
+        if pnl_usd >= 0:
+            self.daily_wins += 1
+        else:
+            self.daily_losses += 1
+
+        self.telegram.send(msg, description=f"Exit: {symbol}")
+

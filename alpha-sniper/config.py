@@ -179,6 +179,17 @@ class Config:
         self.telegram_trade_screenshots_enabled = self.parse_bool(get_env("TELEGRAM_TRADE_SCREENSHOTS_ENABLED", "false"))
         self.telegram_daily_report_enabled = self.parse_bool(get_env("TELEGRAM_DAILY_REPORT_ENABLED", "true"))
 
+        # Telegram "full story" message controls
+        self.telegram_trade_alerts = self.parse_bool(get_env("TELEGRAM_TRADE_ALERTS", "true"))  # Entry/exit alerts
+        self.telegram_scan_summary = self.parse_bool(get_env("TELEGRAM_SCAN_SUMMARY", "true"))  # Scan cycle summary
+        self.telegram_why_no_trade = self.parse_bool(get_env("TELEGRAM_WHY_NO_TRADE", "true"))  # Why no trade explanation
+        self.telegram_max_msg_len = int(get_env("TELEGRAM_MAX_MSG_LEN", "3500"))  # Max message length (truncate)
+
+        # === VPS PERFORMANCE LIMITS ===
+        # For low-memory VPS deployments
+        self.scan_universe_max = int(get_env("SCAN_UNIVERSE_MAX", "800"))  # Max symbols to scan
+        self.scan_sleep_secs = float(get_env("SCAN_SLEEP_SECS", "0"))  # Optional sleep between scans (pacing)
+
         # === DRIFT DETECTION ===
         self.drift_detection_enabled = self.parse_bool(get_env("DRIFT_DETECTION_ENABLED", "true"))
         self.drift_max_stall_multiplier = int(get_env("DRIFT_MAX_STALL_MULTIPLIER", "3"))  # max(3 * scan_interval, 600s)

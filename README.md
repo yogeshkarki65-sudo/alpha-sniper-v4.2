@@ -61,6 +61,93 @@ alpha-sniper-v4.2/
     └── requirements.txt   # Dependencies
 ```
 
+## Configuration Guide
+
+### Core Protection Settings
+
+**Pump Max Loss (Virtual Stop)**
+```bash
+# Default max loss for all pump trades
+PUMP_MAX_LOSS_PCT=0.02                      # 2% guaranteed max loss
+
+# Per-regime overrides (optional)
+PUMP_MAX_LOSS_PCT_SIDEWAYS=0.03             # 3% for sideways markets
+PUMP_MAX_LOSS_PCT_STRONG_BULL=0.015         # 1.5% for strong bull
+PUMP_MAX_LOSS_PCT_MILD_BEAR=0.025           # 2.5% for mild bear
+PUMP_MAX_LOSS_PCT_FULL_BEAR=0.04            # 4% for full bear
+
+# Watchdog check interval
+PUMP_MAX_LOSS_WATCHDOG_INTERVAL=1.0         # Check every 1 second
+```
+
+**Pump-Only Mode**
+```bash
+PUMP_ONLY=true                               # Use ONLY pump engine
+# OR
+PUMP_ONLY_MODE=true                          # Alternative name
+```
+
+### Telegram Alerts (Full Story)
+
+```bash
+# Enable/disable alert types
+TELEGRAM_TRADE_ALERTS=true                   # Entry/exit notifications
+TELEGRAM_SCAN_SUMMARY=true                   # Scan cycle summaries
+TELEGRAM_WHY_NO_TRADE=true                   # Why no trade explanations
+TELEGRAM_MAX_MSG_LEN=3500                    # Max message length (truncate)
+```
+
+**What You'll Receive:**
+- 📊 Scan cycle start (regime, engines, universe size, top signals)
+- 🟢 Position entry (symbol, engine, score, triggers, liquidity scaling, stops)
+- 📉 Position exit (PnL, hold time, reason, trigger details)
+- ❓ Why no trade (reasons when no positions opened)
+
+### VPS Performance Optimization
+
+For low-memory VPS deployments:
+
+```bash
+# Limit scan universe size
+SCAN_UNIVERSE_MAX=800                        # Max symbols to scan
+
+# Add pacing between scans (reduces CPU spikes)
+SCAN_SLEEP_SECS=0                            # Optional sleep (0 = disabled)
+
+# Exchange info caching
+EXCHANGE_INFO_CACHE_SECONDS=300              # Cache for 5 minutes
+
+# API rate limiting
+MAX_CONCURRENT_API_CALLS=10                  # Limit concurrent requests
+```
+
+### Complete Example Configuration
+
+`/etc/alpha-sniper/alpha-sniper-live.env`:
+```bash
+# === CORE SETTINGS ===
+SIM_MODE=false
+MEXC_API_KEY=your_key_here
+MEXC_SECRET_KEY=your_secret_here
+STARTING_EQUITY=1000
+
+# === PUMP MAX LOSS PROTECTION ===
+PUMP_MAX_LOSS_PCT=0.02
+PUMP_MAX_LOSS_WATCHDOG_INTERVAL=1.0
+PUMP_ONLY=true
+
+# === TELEGRAM FULL STORY ===
+TELEGRAM_BOT_TOKEN=your_token
+TELEGRAM_CHAT_ID=your_chat_id
+TELEGRAM_TRADE_ALERTS=true
+TELEGRAM_SCAN_SUMMARY=true
+TELEGRAM_WHY_NO_TRADE=true
+
+# === VPS PERFORMANCE ===
+SCAN_UNIVERSE_MAX=800
+EXCHANGE_INFO_CACHE_SECONDS=300
+```
+
 ## How to Fetch CodeRabbit Report on Server
 
 CodeRabbit PR reviews can be downloaded and saved on the server for offline analysis.
