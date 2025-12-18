@@ -106,11 +106,12 @@ class Config:
         self.min_stop_pct_bear_micro = float(get_env("MIN_STOP_PCT_BEAR_MICRO", "0.06"))
         self.min_stop_pct_pump = float(get_env("MIN_STOP_PCT_PUMP", "0.08"))
 
-        # HARD STOP GUARANTEE for pump trades (synthetic watchdog protection)
+        # PUMP MAX LOSS GUARANTEE (synthetic watchdog protection)
         # This is the GUARANTEED max loss enforced by synthetic stop watchdog
         # Even if exchange stop placement fails or exchange has minimum distance constraints
-        self.hard_stop_pct_pump = float(get_env("HARD_STOP_PCT_PUMP", "0.02"))  # 2% guaranteed max loss
-        self.hard_stop_watchdog_interval = float(get_env("HARD_STOP_WATCHDOG_INTERVAL", "1.0"))  # Check every 1 second
+        # Supports per-regime overrides: PUMP_MAX_LOSS_PCT_<REGIME> (e.g., PUMP_MAX_LOSS_PCT_SIDEWAYS)
+        self.pump_max_loss_pct = float(get_env("PUMP_MAX_LOSS_PCT", "0.02"))  # 2% guaranteed max loss (default)
+        self.pump_max_loss_watchdog_interval = float(get_env("PUMP_MAX_LOSS_WATCHDOG_INTERVAL", "1.0"))  # Check every 1 second
 
         # Entry-DETE (Smart Entry Timing Engine) - execution-level, NOT managed by DFE
         self.entry_dete_enabled = self.parse_bool(get_env("ENTRY_DETE_ENABLED", "false"))
@@ -319,6 +320,41 @@ class Config:
             new_listing_min_score=get_threshold('new_listing_min_score', defaults['new_listing_min_score']),
             new_listing_min_momentum=get_threshold('new_listing_min_momentum', defaults['new_listing_min_momentum']),
         )
+
+    def get_pump_max_loss_pct(self, regime: str) -> float:
+        """
+        Get pump max loss percentage with optional per-regime override
+
+        Checks for regime-specific override first (e.g., PUMP_MAX_LOSS_PCT_SIDEWAYS),
+        then falls back to default pump_max_loss_pct
+
+        Args:
+            regime: Current market regime (e.g., "SIDEWAYS", "STRONG_BULL", "MILD_BEAR")
+
+        Returns:
+            Max loss percentage (e.g., 0.02 for 2%)
+
+        Examples:
+            PUMP_MAX_LOSS_PCT=0.02 (default 2% for all regimes)
+            PUMP_MAX_LOSS_PCT_SIDEWAYS=0.03 (3% for sideways only)
+            PUMP_MAX_LOSS_PCT_STRONG_BULL=0.015 (1.5% for strong bull only)
+        """
+        # Normalize regime name
+        regime_upper = regime.upper().replace(' ', '_').replace('-', '_')
+
+        # Check for regime-specific override
+        override_key = f"PUMP_MAX_LOSS_PCT_{regime_upper}"
+        override_value = self._get_env(override_key, None)
+
+        if override_value:
+            try:
+                return float(override_value)
+            except (ValueError, TypeError):
+                # Invalid override value, fall back to default
+                pass
+
+        # Fall back to default
+        return self.pump_max_loss_pct
 
     @staticmethod
     def parse_bool(value):
