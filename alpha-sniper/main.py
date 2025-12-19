@@ -184,16 +184,13 @@ class AlphaSniperBot:
 
             # Send scan summary (if enabled)
             try:
-                # Get enabled engines
+                # Get enabled engines based on pump_only_mode
                 enabled_engines = []
-                if self.config.enable_pump:
+                if self.config.pump_only_mode:
                     enabled_engines.append('PUMP')
-                if self.config.enable_long:
-                    enabled_engines.append('LONG')
-                if self.config.enable_short:
-                    enabled_engines.append('SHORT')
-                if self.config.enable_bear_micro:
-                    enabled_engines.append('BEAR_MICRO')
+                else:
+                    # Default: all engines enabled (adjust based on your actual logic)
+                    enabled_engines = ['PUMP', 'LONG', 'SHORT', 'BEAR_MICRO']
 
                 # Get top signals
                 top_signals = []
