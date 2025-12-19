@@ -183,14 +183,14 @@ section_header "4. RECENT BOT ACTIVITY (Last 15 min)"
 
 RECENT_LOGS=$(sudo journalctl -u alpha-sniper-live.service --since "15 minutes ago" --no-pager 2>/dev/null)
 
-# Check for scan cycles
-SCAN_COUNT=$(echo "$RECENT_LOGS" | grep -c "Scan cycle starting" || echo "0")
+# Check for scan cycles (look for either "Scan cycle starting" or "Market data" as scan indicators)
+SCAN_COUNT=$(echo "$RECENT_LOGS" | grep -cE "(Scan cycle starting|Market data:.*symbols fetched)" || echo "0")
 SCAN_COUNT=$(sanitize_count "$SCAN_COUNT")
 if [[ "$SCAN_COUNT" -gt 0 ]]; then
     check_pass "Scan cycles active ($SCAN_COUNT scans in last 15 min)"
 
     # Show last scan info
-    LAST_SCAN=$(echo "$RECENT_LOGS" | grep "Scan cycle starting" | tail -1)
+    LAST_SCAN=$(echo "$RECENT_LOGS" | grep -E "(Scan cycle starting|Market data:.*symbols fetched)" | tail -1)
     if [[ -n "$LAST_SCAN" ]]; then
         echo "   Last scan: $(echo "$LAST_SCAN" | awk '{print $1, $2, $3}')"
     fi
@@ -335,7 +335,7 @@ fi
 # ============================================================================
 section_header "8. ERROR ANALYSIS (Last 15 min)"
 
-CRITICAL_ERRORS=$(echo "$RECENT_LOGS" | grep -iE "(ERROR|CRITICAL|Exception|Traceback)" | grep -vE "(NIGHT/USDT|partial|TP)" | wc -l || echo "0")
+CRITICAL_ERRORS=$(echo "$RECENT_LOGS" | grep -iE "(ERROR|CRITICAL|Exception|Traceback)" | grep -vE "(NIGHT/USDT|partial|TP|INFO)" | wc -l || echo "0")
 CRITICAL_ERRORS=$(sanitize_count "$CRITICAL_ERRORS")
 
 if [[ "$CRITICAL_ERRORS" -eq 0 ]]; then
@@ -344,7 +344,7 @@ else
     check_fail "$CRITICAL_ERRORS error(s) detected in last 15 minutes"
     echo ""
     echo "Recent errors:"
-    echo "$RECENT_LOGS" | grep -iE "(ERROR|CRITICAL|Exception)" | grep -vE "(NIGHT/USDT|partial|TP)" | tail -5
+    echo "$RECENT_LOGS" | grep -iE "(ERROR|CRITICAL|Exception)" | grep -vE "(NIGHT/USDT|partial|TP|INFO)" | tail -5
 fi
 
 # Check for old NIGHT/USDT errors (can be ignored)
