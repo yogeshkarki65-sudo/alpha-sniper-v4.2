@@ -48,6 +48,11 @@ section_header() {
     echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 }
 
+# Sanitize count values (ensure single integer)
+sanitize_count() {
+    echo "$1" | head -1 | tr -d '\n\r' | grep -oE '^[0-9]+$' || echo "0"
+}
+
 # ============================================================================
 # 1. SYSTEMD SERVICE STATUS
 # ============================================================================
@@ -68,7 +73,8 @@ else
 fi
 
 # Check if service has recent restarts
-RESTART_COUNT=$(sudo journalctl -u alpha-sniper-live.service --since "1 hour ago" | grep -c "Started Alpha Sniper" || echo "0")
+RESTART_COUNT=$(sudo journalctl -u alpha-sniper-live.service --since "1 hour ago" --no-pager 2>/dev/null | grep -c "Started Alpha Sniper" || echo "0")
+RESTART_COUNT=$(sanitize_count "$RESTART_COUNT")
 if [[ "$RESTART_COUNT" -gt 3 ]]; then
     check_warn "Service restarted $RESTART_COUNT times in last hour (possible crash loop)"
 elif [[ "$RESTART_COUNT" -gt 0 ]]; then
@@ -179,6 +185,7 @@ RECENT_LOGS=$(sudo journalctl -u alpha-sniper-live.service --since "15 minutes a
 
 # Check for scan cycles
 SCAN_COUNT=$(echo "$RECENT_LOGS" | grep -c "Scan cycle starting" || echo "0")
+SCAN_COUNT=$(sanitize_count "$SCAN_COUNT")
 if [[ "$SCAN_COUNT" -gt 0 ]]; then
     check_pass "Scan cycles active ($SCAN_COUNT scans in last 15 min)"
 
@@ -203,6 +210,7 @@ fi
 
 # Check for pump trades
 PUMP_TRADES=$(echo "$RECENT_LOGS" | grep -c "PUMP.*Position opened" || echo "0")
+PUMP_TRADES=$(sanitize_count "$PUMP_TRADES")
 if [[ "$PUMP_TRADES" -gt 0 ]]; then
     check_pass "Pump trades occurring ($PUMP_TRADES in last 15 min)"
 else
@@ -225,12 +233,14 @@ section_header "5. WATCHDOG PROTECTION"
 # Check last 30 minutes for watchdog (it may start once then run silently)
 WATCHDOG_LOGS=$(sudo journalctl -u alpha-sniper-live.service --since "30 minutes ago" --no-pager 2>/dev/null)
 WATCHDOG_INIT=$(echo "$WATCHDOG_LOGS" | grep -c "SYNTHETIC STOP WATCHDOG started" || echo "0")
+WATCHDOG_INIT=$(sanitize_count "$WATCHDOG_INIT")
 
 if [[ "$WATCHDOG_INIT" -gt 0 ]]; then
     check_pass "Watchdog initialized and running"
 else
     # Check if service was restarted in last 30 min
     SERVICE_START=$(echo "$WATCHDOG_LOGS" | grep -c "Started Alpha Sniper" || echo "0")
+    SERVICE_START=$(sanitize_count "$SERVICE_START")
     if [[ "$SERVICE_START" -eq 0 ]]; then
         check_pass "Watchdog running (service has been up >30 min, watchdog initialized at startup)"
     else
@@ -240,6 +250,7 @@ fi
 
 # Check for any watchdog triggers
 WATCHDOG_TRIGGERS=$(echo "$WATCHDOG_LOGS" | grep -c "PUMP_MAX_LOSS.*triggered" || echo "0")
+WATCHDOG_TRIGGERS=$(sanitize_count "$WATCHDOG_TRIGGERS")
 if [[ "$WATCHDOG_TRIGGERS" -gt 0 ]]; then
     check_warn "Watchdog triggered $WATCHDOG_TRIGGERS time(s) - max loss protection activated"
 else
@@ -253,10 +264,12 @@ section_header "6. TELEGRAM MESSAGING"
 
 # Check for Telegram initialization
 TG_INIT=$(echo "$WATCHDOG_LOGS" | grep -c "Telegram bot initialized" || echo "0")
+TG_INIT=$(sanitize_count "$TG_INIT")
 if [[ "$TG_INIT" -gt 0 ]]; then
     check_pass "Telegram bot initialized"
 else
     SERVICE_START=$(echo "$WATCHDOG_LOGS" | grep -c "Started Alpha Sniper" || echo "0")
+    SERVICE_START=$(sanitize_count "$SERVICE_START")
     if [[ "$SERVICE_START" -eq 0 ]]; then
         check_pass "Telegram bot initialized at startup (service up >30 min)"
     else
@@ -266,6 +279,7 @@ fi
 
 # Check for scan summaries
 SCAN_SUMMARIES=$(echo "$RECENT_LOGS" | grep -c "Sending scan summary" || echo "0")
+SCAN_SUMMARIES=$(sanitize_count "$SCAN_SUMMARIES")
 if [[ "$SCAN_SUMMARIES" -gt 0 ]]; then
     check_pass "Scan summaries being sent ($SCAN_SUMMARIES in last 15 min)"
 else
@@ -278,6 +292,7 @@ fi
 
 # Check for trade alerts
 TRADE_ALERTS=$(echo "$RECENT_LOGS" | grep -c "Sending.*alert" || echo "0")
+TRADE_ALERTS=$(sanitize_count "$TRADE_ALERTS")
 if [[ "$TRADE_ALERTS" -gt 0 ]]; then
     check_pass "Trade alerts being sent ($TRADE_ALERTS in last 15 min)"
 else
@@ -297,6 +312,7 @@ POSITIONS_FILE="/var/lib/alpha-sniper/positions.json"
 if [[ -f "$POSITIONS_FILE" ]]; then
     POSITIONS=$(cat "$POSITIONS_FILE" 2>/dev/null || echo "[]")
     POS_COUNT=$(echo "$POSITIONS" | grep -o '"symbol"' | wc -l || echo "0")
+    POS_COUNT=$(sanitize_count "$POS_COUNT")
 
     if [[ "$POS_COUNT" -eq 0 ]]; then
         check_pass "0 open positions (clean slate)"
@@ -305,6 +321,7 @@ if [[ -f "$POSITIONS_FILE" ]]; then
 
         # Check for old max_hold_hours
         OLD_MAX_HOLD=$(echo "$POSITIONS" | grep -c '"max_hold_hours": 3' || echo "0")
+        OLD_MAX_HOLD=$(sanitize_count "$OLD_MAX_HOLD")
         if [[ "$OLD_MAX_HOLD" -gt 0 ]]; then
             check_warn "$OLD_MAX_HOLD position(s) still using old 3h max hold (opened before optimization)"
         fi
@@ -319,6 +336,7 @@ fi
 section_header "8. ERROR ANALYSIS (Last 15 min)"
 
 CRITICAL_ERRORS=$(echo "$RECENT_LOGS" | grep -iE "(ERROR|CRITICAL|Exception|Traceback)" | grep -vE "(NIGHT/USDT|partial|TP)" | wc -l || echo "0")
+CRITICAL_ERRORS=$(sanitize_count "$CRITICAL_ERRORS")
 
 if [[ "$CRITICAL_ERRORS" -eq 0 ]]; then
     check_pass "No critical errors in last 15 minutes"
@@ -331,6 +349,7 @@ fi
 
 # Check for old NIGHT/USDT errors (can be ignored)
 OLD_ERRORS=$(echo "$RECENT_LOGS" | grep -c "NIGHT/USDT" || echo "0")
+OLD_ERRORS=$(sanitize_count "$OLD_ERRORS")
 if [[ "$OLD_ERRORS" -gt 0 ]]; then
     check_pass "Old NIGHT/USDT errors present but can be ignored ($OLD_ERRORS occurrences)"
 fi
@@ -370,6 +389,7 @@ if [[ -d "/opt/alpha-sniper/.git" ]]; then
     fi
 
     UNCOMMITTED=$(git status --porcelain 2>/dev/null | wc -l || echo "0")
+    UNCOMMITTED=$(sanitize_count "$UNCOMMITTED")
     if [[ "$UNCOMMITTED" -eq 0 ]]; then
         check_pass "No uncommitted changes"
     else
