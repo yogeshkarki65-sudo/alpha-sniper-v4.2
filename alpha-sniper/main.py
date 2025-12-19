@@ -204,17 +204,19 @@ class AlphaSniperBot:
 
                 # Get universe count (estimate from config or default)
                 universe_count = getattr(self.config, 'scan_universe_max', 800)
+                signals_count = len(signals) if signals else 0
 
                 self.alert_mgr.send_scan_summary(
                     regime=new_regime,
                     enabled_engines=enabled_engines,
                     universe_count=universe_count,
-                    signals_count=len(signals) if signals else 0,
+                    signals_count=signals_count,
                     top_signals=top_signals,
                     scan_time_ms=scan_duration_ms
                 )
+                self.logger.info(f"📨 Scan summary sent to Telegram ({signals_count} signals)")
             except Exception as e:
-                self.logger.debug(f"Failed to send scan summary: {e}")
+                self.logger.error(f"❌ Failed to send scan summary: {e}")
 
             # 5. Process new signals
             signals_opened_count = 0
