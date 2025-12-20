@@ -414,9 +414,38 @@ class RiskEngine:
 
             except Exception as e:
                 self.logger.error(f"[LiquiditySizing] Error: {e}, using base size")
-                return base_size
+                # Fall through to score scaling
 
-        return base_size
+        # === PHASE 2C: SCORE-BASED POSITION SCALING ===
+        # Scale position size based on signal quality (score)
+        final_size = base_size
+        if getattr(self.config, 'position_scale_with_score', False):
+            try:
+                score = signal.get('score', 0.75)
+                min_score = getattr(self.config, 'min_score_pump', 0.75)
+                max_scale = getattr(self.config, 'position_scale_max', 1.5)
+
+                # Calculate scale factor (1.0 at min_score, up to max_scale at score=1.0)
+                if score >= min_score and min_score > 0:
+                    # Linear scaling from 1.0 to max_scale
+                    score_range = 1.0 - min_score
+                    score_excess = score - min_score
+                    scale_factor = 1.0 + ((score_excess / score_range) * (max_scale - 1.0))
+                    scale_factor = min(scale_factor, max_scale)  # Cap at max_scale
+
+                    final_size = base_size * scale_factor
+
+                    if scale_factor > 1.05:  # Only log significant scaling
+                        self.logger.info(
+                            f"[ScoreScaling] {signal.get('symbol')} | "
+                            f"score={score:.2f} base=${base_size:.2f} → ${final_size:.2f} "
+                            f"(x{scale_factor:.2f})"
+                        )
+            except Exception as e:
+                self.logger.error(f"[ScoreScaling] Error: {e}, using base size")
+                final_size = base_size
+
+        return final_size
 
     def can_open_new_position(self, signal: Dict) -> tuple[bool, Optional[str]]:
         """

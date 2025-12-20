@@ -342,6 +342,60 @@ class PumpEngine:
             # NORMAL MODE: Standard hold time
             max_hold_hours = 6
 
+        # === PHASE 3A: CONFIRMATION CANDLES CHECK ===
+        # Require N consecutive candles showing volume + price strength
+        if getattr(self.config, 'pump_confirmation_candles', 0) > 0:
+            try:
+                required_candles = self.config.pump_confirmation_candles
+                volume_mult = getattr(self.config, 'pump_confirmation_volume_mult', 3.0)
+                price_change_pct = getattr(self.config, 'pump_confirmation_price_change_pct', 0.02)
+
+                # Check last N candles from 15m dataframe
+                if len(df_15m) < required_candles + 10:
+                    if debug_rejections is not None:
+                        debug_rejections.append(f"{symbol}: CONFIRMATION_INSUFFICIENT_DATA")
+                    return None
+
+                recent_candles = df_15m.iloc[-(required_candles):]
+                avg_vol_base = df_15m['volume'].iloc[-(required_candles+10):-(required_candles)].mean()
+
+                confirmation_passed = True
+                for idx, row in recent_candles.iterrows():
+                    candle_volume = row['volume']
+                    candle_open = row['open']
+                    candle_close = row['close']
+
+                    # Check volume spike
+                    if candle_volume < avg_vol_base * volume_mult:
+                        confirmation_passed = False
+                        break
+
+                    # Check bullish close (price up)
+                    price_change = (candle_close / candle_open) - 1
+                    if price_change < price_change_pct:
+                        confirmation_passed = False
+                        break
+
+                if not confirmation_passed:
+                    if debug_rejections is not None:
+                        debug_rejections.append(
+                            f"{symbol}: CONFIRMATION_FAILED (need {required_candles} candles with "
+                            f"{volume_mult}x vol + {price_change_pct*100}% gain)"
+                        )
+                    return None
+
+                # Log confirmation success
+                if self.debug_enabled:
+                    self.logger.info(
+                        f"[PUMP_DEBUG] {symbol}: ✅ CONFIRMATION_PASSED "
+                        f"({required_candles} candles verified)"
+                    )
+
+            except Exception as e:
+                self.logger.error(f"[ConfirmationCheck] Error for {symbol}: {e}")
+                # Don't fail the signal on confirmation check error - fall through
+                pass
+
         # Create signal dict
         signal = {
             'symbol': symbol,
