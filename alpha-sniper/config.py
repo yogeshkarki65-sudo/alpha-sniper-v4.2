@@ -134,7 +134,7 @@ class Config:
         self.pump_min_momentum_1h = float(get_env("PUMP_MIN_MOMENTUM_1H", "5.0"))
         self.pump_min_24h_quote_volume = float(get_env("PUMP_MIN_24H_QUOTE_VOLUME", "200000"))
         self.pump_min_score = int(get_env("PUMP_MIN_SCORE", "15"))
-        self.pump_max_hold_hours = int(get_env("PUMP_MAX_HOLD_HOURS", "4"))
+        self.pump_max_hold_hours = int(get_env("PUMP_MAX_HOLD_HOURS", "24"))  # 24 hours max hold time
 
         # === NEW LISTING BYPASS (looser filters for newly listed tokens) ===
         self.pump_new_listing_bypass = self.parse_bool(get_env("PUMP_NEW_LISTING_BYPASS", "false"))
