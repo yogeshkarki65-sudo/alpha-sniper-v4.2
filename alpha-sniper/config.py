@@ -185,6 +185,10 @@ class Config:
         self.telegram_why_no_trade = self.parse_bool(get_env("TELEGRAM_WHY_NO_TRADE", "true"))  # Why no trade explanation
         self.telegram_max_msg_len = int(get_env("TELEGRAM_MAX_MSG_LEN", "3500"))  # Max message length (truncate)
 
+        # === SYMBOL BLACKLIST (symbols causing API errors or untradeable) ===
+        blacklist_str = get_env("SYMBOL_BLACKLIST", "")
+        self.symbol_blacklist = set([s.strip() for s in blacklist_str.split(',') if s.strip()])
+
         # === VPS PERFORMANCE LIMITS ===
         # For low-memory VPS deployments
         self.scan_universe_max = int(get_env("SCAN_UNIVERSE_MAX", "800"))  # Max symbols to scan

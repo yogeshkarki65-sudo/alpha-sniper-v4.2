@@ -167,6 +167,7 @@ class Scanner:
                 'quote_currency': 0,
                 'volume': 0,
                 'inactive': 0,
+                'blacklisted': 0,
                 'total_checked': 0
             }
 
@@ -200,6 +201,12 @@ class Scanner:
                         rejected_counts['inactive'] += 1
                         continue
 
+                # === BLACKLIST FILTER (symbols causing API errors) ===
+                if symbol in self.config.symbol_blacklist:
+                    rejected_counts['blacklisted'] += 1
+                    self.logger.debug(f"[BLACKLIST] Skipping {symbol} (in SYMBOL_BLACKLIST)")
+                    continue
+
                 universe.append(symbol)
 
             self.logger.debug(
@@ -207,6 +214,7 @@ class Scanner:
                 f"checked={rejected_counts['total_checked']} "
                 f"rejected_quote={rejected_counts['quote_currency']} "
                 f"rejected_inactive={rejected_counts['inactive']} "
+                f"rejected_blacklisted={rejected_counts['blacklisted']} "
                 f"passed={len(universe)}"
             )
 
