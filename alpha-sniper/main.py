@@ -322,8 +322,44 @@ class AlphaSniperBot:
                     except:
                         self.logger.info(f"[EXIT] Breakeven activated for {symbol}")
 
-                # Exit improvement: Partial TP (50%) at +2R
-                if unrealized_r >= 2.0 and 'partial_tp_taken' not in position:
+                # === PARTIAL TAKE PROFIT LOGIC (Phase 2B - Enhanced) ===
+                if getattr(self.config, 'pump_partial_tp_enabled', False) and position.get('engine') == 'pump':
+                    tp_levels_str = getattr(self.config, 'pump_partial_tp_levels', '0.05:0.5,0.10:1.0')
+                    try:
+                        tp_levels = []
+                        for level in tp_levels_str.split(','):
+                            profit_target, sell_portion = level.strip().split(':')
+                            tp_levels.append((float(profit_target), float(sell_portion)))
+
+                        if 'partial_tps_taken' not in position:
+                            position['partial_tps_taken'] = []
+
+                        for idx, (target_pct, portion) in enumerate(tp_levels):
+                            level_key = f"tp_{int(target_pct*100)}pct"
+                            if level_key in position['partial_tps_taken']:
+                                continue
+
+                            if pnl_pct >= (target_pct * 100):
+                                qty = position.get('qty', 0)
+                                sell_qty = qty * portion
+                                if not self.config.sim_mode and sell_qty > 0:
+                                    try:
+                                        close_side = 'sell' if side == 'long' else 'buy'
+                                        order = self.exchange.create_order(symbol=symbol, type='market', side=close_side, amount=sell_qty)
+                                        if order and order.get('id'):
+                                            position['qty'] = qty - sell_qty
+                                            position['partial_tps_taken'].append(level_key)
+                                            self.logger.info(f"[PARTIAL_TP] 💰 {symbol} | Sold {portion*100:.0f}% at +{target_pct*100:.0f}% | Remaining: {position['qty']:.4f}")
+                                            if portion >= 1.0:
+                                                positions_to_close.append((position, current_price, f"Full TP at +{pnl_pct:.1f}%"))
+                                                break
+                                    except Exception as e:
+                                        self.logger.error(f"[PARTIAL_TP] Failed for {symbol}: {e}")
+                    except Exception as e:
+                        self.logger.error(f"[PARTIAL_TP] Config parse error: {e}")
+
+                # Exit improvement: Partial TP (50%) at +2R (LEGACY)
+                if unrealized_r >= 2.0 and 'partial_tp_taken' not in position and position.get('engine') != 'pump':
                     qty = position.get('qty', 0)
                     partial_qty = qty * 0.5
 
@@ -474,8 +510,44 @@ class AlphaSniperBot:
                     except:
                         self.logger.info(f"[EXIT] Breakeven activated for {symbol}")
 
-                # Exit improvement: Partial TP (50%) at +2R
-                if unrealized_r >= 2.0 and 'partial_tp_taken' not in position:
+                # === PARTIAL TAKE PROFIT LOGIC (Phase 2B - Enhanced) ===
+                if getattr(self.config, 'pump_partial_tp_enabled', False) and position.get('engine') == 'pump':
+                    tp_levels_str = getattr(self.config, 'pump_partial_tp_levels', '0.05:0.5,0.10:1.0')
+                    try:
+                        tp_levels = []
+                        for level in tp_levels_str.split(','):
+                            profit_target, sell_portion = level.strip().split(':')
+                            tp_levels.append((float(profit_target), float(sell_portion)))
+
+                        if 'partial_tps_taken' not in position:
+                            position['partial_tps_taken'] = []
+
+                        for idx, (target_pct, portion) in enumerate(tp_levels):
+                            level_key = f"tp_{int(target_pct*100)}pct"
+                            if level_key in position['partial_tps_taken']:
+                                continue
+
+                            if pnl_pct >= (target_pct * 100):
+                                qty = position.get('qty', 0)
+                                sell_qty = qty * portion
+                                if not self.config.sim_mode and sell_qty > 0:
+                                    try:
+                                        close_side = 'sell' if side == 'long' else 'buy'
+                                        order = self.exchange.create_order(symbol=symbol, type='market', side=close_side, amount=sell_qty)
+                                        if order and order.get('id'):
+                                            position['qty'] = qty - sell_qty
+                                            position['partial_tps_taken'].append(level_key)
+                                            self.logger.info(f"[PARTIAL_TP] 💰 {symbol} | Sold {portion*100:.0f}% at +{target_pct*100:.0f}% | Remaining: {position['qty']:.4f}")
+                                            if portion >= 1.0:
+                                                positions_to_close.append((position, current_price, f"Full TP at +{pnl_pct:.1f}%"))
+                                                break
+                                    except Exception as e:
+                                        self.logger.error(f"[PARTIAL_TP] Failed for {symbol}: {e}")
+                    except Exception as e:
+                        self.logger.error(f"[PARTIAL_TP] Config parse error: {e}")
+
+                # Exit improvement: Partial TP (50%) at +2R (LEGACY)
+                if unrealized_r >= 2.0 and 'partial_tp_taken' not in position and position.get('engine') != 'pump':
                     qty = position.get('qty', 0)
                     partial_qty = qty * 0.5
 
@@ -713,6 +785,37 @@ class AlphaSniperBot:
                                     f"GUARANTEED_MAX_LOSS_ENFORCED"
                                 )
                                 positions_to_close.append((position, current_price, f"Watchdog hard stop {loss_pct:.1f}%"))
+
+                        # === TRAILING STOP LOGIC (Phase 2A) ===
+                        # Only apply if trailing stops are enabled
+                        if getattr(self.config, 'pump_trailing_enabled', False):
+                            trailing_activation_pct = getattr(self.config, 'pump_trailing_activation_pct', 0.05)
+                            trailing_pct = getattr(self.config, 'pump_trailing_pct', 0.03)
+
+                            # Check if position is in profit enough to activate trailing
+                            if side == 'long':
+                                profit_pct = (current_price / entry_price) - 1
+                                if profit_pct >= trailing_activation_pct:
+                                    # Calculate new trailing stop (only move up!)
+                                    new_trailing_stop = current_price * (1 - trailing_pct)
+                                    current_trailing = position.get('trailing_stop', 0)
+
+                                    if new_trailing_stop > current_trailing:
+                                        position['trailing_stop'] = new_trailing_stop
+                                        self.logger.info(
+                                            f"[WATCHDOG] Trailing stop updated: {symbol} | "
+                                            f"new_trail={new_trailing_stop:.6f} (+{profit_pct*100:.1f}%)"
+                                        )
+
+                                    # Check if trailing stop hit
+                                    if current_trailing > 0 and current_price <= current_trailing:
+                                        profit_pct_final = (current_price / entry_price - 1) * 100
+                                        self.logger.info(
+                                            f"[WATCHDOG_TRAIL] 📈 TRIGGERED | {symbol} {side} | "
+                                            f"entry={entry_price:.6f} current={current_price:.6f} "
+                                            f"trail={current_trailing:.6f} profit={profit_pct_final:.2f}%"
+                                        )
+                                        positions_to_close.append((position, current_price, f"Trailing stop +{profit_pct_final:.1f}%"))
 
                     except Exception as e:
                         self.logger.error(f"[WATCHDOG] Error checking {position.get('symbol', 'UNKNOWN')}: {e}")
