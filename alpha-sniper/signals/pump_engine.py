@@ -310,17 +310,40 @@ class PumpEngine:
         if debug_counts is not None:
             debug_counts["after_core"] += 1
 
-        # Calculate stop loss (tighter for pumps)
+        # === CALCULATE STOP LOSS ===
         atr_15m = helpers.calculate_atr(df_15m, 14).iloc[-1]
         swing_low = df_15m['low'].iloc[-5:].min()
 
-        # Pump SL: very tight (1.5 ATR or 3% below)
-        sl_atr = current_price - (1.5 * atr_15m)
-        sl_pct = current_price * 0.97  # 3% hard stop
+        # Phase 3B: ATR-based stops (optional, more dynamic)
+        if getattr(self.config, 'pump_use_atr_stops', False):
+            atr_period = getattr(self.config, 'pump_atr_period', 14)
+            atr_multiplier = getattr(self.config, 'pump_atr_multiplier', 2.0)
 
-        stop_loss = max(sl_atr, sl_pct, swing_low * 0.99)
+            # Calculate ATR with configured period
+            if atr_period != 14:
+                atr_value = helpers.calculate_atr(df_15m, atr_period).iloc[-1]
+            else:
+                atr_value = atr_15m
 
-        # Enforce minimum stop distance (Fast Stop Manager safety rail for pump)
+            # ATR-based stop (adapts to volatility)
+            stop_loss = current_price - (atr_value * atr_multiplier)
+
+            # Optional: respect swing low
+            stop_loss = max(stop_loss, swing_low * 0.99)
+
+            if self.debug_enabled:
+                self.logger.info(
+                    f"[PUMP_DEBUG] {symbol}: ATR Stop | "
+                    f"atr={atr_value:.6f} mult={atr_multiplier} "
+                    f"stop={stop_loss:.6f}"
+                )
+        else:
+            # Legacy: Fixed percentage stop (1.5 ATR or 3% below)
+            sl_atr = current_price - (1.5 * atr_15m)
+            sl_pct = current_price * 0.97  # 3% hard stop
+            stop_loss = max(sl_atr, sl_pct, swing_low * 0.99)
+
+        # Enforce minimum stop distance (Fast Stop Manager safety rail)
         min_stop_distance = current_price * self.config.min_stop_pct_pump
         actual_stop_distance = current_price - stop_loss
         if actual_stop_distance < min_stop_distance:
