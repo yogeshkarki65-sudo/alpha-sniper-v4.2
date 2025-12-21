@@ -418,8 +418,13 @@ class RealExchange(BaseExchange):
     - Enhanced _with_retries with funding-rate spam suppression
     - Exponential backoff retry strategy
     - Clean error handling without log flooding
+    - Quarantine system for problematic symbols
+    - Robust order execution wrapper
     """
     def __init__(self, config, logger):
+        from core.quarantine_manager import QuarantineManager
+        from core.order_executor import OrderExecutor
+
         self.config = config
         self.logger = logger
 
@@ -432,6 +437,10 @@ class RealExchange(BaseExchange):
             'timeout': 5000,  # 5s timeout to prevent scan loop stalling
             'enableRateLimit': True,
         })
+
+        # Initialize quarantine and order executor
+        self.quarantine = QuarantineManager(config)
+        self.order_executor = OrderExecutor(self, self.quarantine, logger)
 
         self.logger.info("🌐 RealExchange initialized (LIVE mode with MEXC)")
 
@@ -573,109 +582,25 @@ class RealExchange(BaseExchange):
             self.logger.debug(f"Error getting liquidity metrics for {symbol}: {e}")
             return {'spread_pct': 1.0, 'depth_usd': 5000}
 
+    def create_order_raw(self, symbol, type, side, amount, price=None, params=None):
+        """Raw order creation via CCXT (used by OrderExecutor)."""
+        return self._with_retries(
+            lambda: self.client.create_order(symbol, type, side, amount, price, params),
+            f"create_order {symbol}"
+        )
+
     def create_order(self, symbol, type, side, amount, price=None, params=None):
         """
-        Create real order on MEXC with robust error handling
+        Create order via OrderExecutor wrapper with quarantine and validation.
 
         Returns:
             - Order dict if successful
-            - None if failed (logs warning and tracks failure)
+            - None if failed (quarantine applied, logged)
         """
-        try:
-            result = self._with_retries(
-                lambda: self.client.create_order(symbol, type, side, amount, price, params),
-                f"create_order {symbol}"
-            )
-
-            # Validate response - MEXC sometimes returns None or invalid data
-            if result is None:
-                self.logger.warning(
-                    f"[ORDER_FAILED] {symbol} {side} | "
-                    f"reason=api_returned_none | "
-                    f"This symbol may not be tradeable or has API issues"
-                )
-                self._track_symbol_failure(symbol, "create_order_returned_none")
-                return None
-
-            # Validate required fields exist
-            if not isinstance(result, dict):
-                self.logger.warning(
-                    f"[ORDER_FAILED] {symbol} {side} | "
-                    f"reason=invalid_response_type | "
-                    f"expected=dict got={type(result).__name__}"
-                )
-                self._track_symbol_failure(symbol, "create_order_invalid_type")
-                return None
-
-            # Success
-            return result
-
-        except TypeError as e:
-            # Specific handling for "NoneType object is not iterable" errors
-            if "'NoneType' object is not iterable" in str(e):
-                self.logger.warning(
-                    f"[ORDER_FAILED] {symbol} {side} | "
-                    f"reason=none_type_iteration_error | "
-                    f"MEXC API issue - recommend adding to SYMBOL_BLACKLIST"
-                )
-                self._track_symbol_failure(symbol, "none_type_error")
-            else:
-                self.logger.error(f"[ORDER_FAILED] {symbol} {side} | TypeError: {e}")
-            return None
-
-        except Exception as e:
-            self.logger.error(f"[ORDER_FAILED] {symbol} {side} | Unexpected error: {e}")
-            self._track_symbol_failure(symbol, f"exception_{type(e).__name__}")
-            return None
-
-    def _track_symbol_failure(self, symbol: str, reason: str):
-        """
-        Track symbols that repeatedly fail to create orders
-        Logs to a file that can be monitored for auto-blacklisting
-        """
-        try:
-            import json
-            from pathlib import Path
-
-            failure_log = Path("/var/lib/alpha-sniper/symbol_failures.json")
-            failure_log.parent.mkdir(parents=True, exist_ok=True)
-
-            # Load existing failures
-            if failure_log.exists():
-                with open(failure_log, 'r') as f:
-                    failures = json.load(f)
-            else:
-                failures = {}
-
-            # Track this failure
-            if symbol not in failures:
-                failures[symbol] = {
-                    'count': 0,
-                    'reasons': [],
-                    'first_seen': int(time.time()),
-                    'last_seen': int(time.time())
-                }
-
-            failures[symbol]['count'] += 1
-            failures[symbol]['last_seen'] = int(time.time())
-            if reason not in failures[symbol]['reasons']:
-                failures[symbol]['reasons'].append(reason)
-
-            # Write back
-            with open(failure_log, 'w') as f:
-                json.dump(failures, f, indent=2)
-
-            # Log warning if symbol has failed multiple times
-            fail_count = failures[symbol]['count']
-            if fail_count >= 3:
-                self.logger.warning(
-                    f"[SYMBOL_FAILURE_ALERT] {symbol} has failed {fail_count} times | "
-                    f"reasons={failures[symbol]['reasons']} | "
-                    f"RECOMMEND: Add to SYMBOL_BLACKLIST"
-                )
-        except Exception as e:
-            # Don't let failure tracking break the bot
-            self.logger.debug(f"Failed to track symbol failure: {e}")
+        order, failure_reason = self.order_executor.execute_order(
+            symbol, type, side, amount, price, params
+        )
+        return order
 
     def fetch_open_positions(self):
         """Fetch open positions from MEXC"""

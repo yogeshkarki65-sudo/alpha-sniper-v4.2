@@ -198,6 +198,35 @@ class Config:
         self.drift_detection_enabled = self.parse_bool(get_env("DRIFT_DETECTION_ENABLED", "true"))
         self.drift_max_stall_multiplier = int(get_env("DRIFT_MAX_STALL_MULTIPLIER", "3"))  # max(3 * scan_interval, 600s)
 
+        # === DDL (Decision Layer) Configuration ===
+        self.ddl_enabled = self.parse_bool(get_env("DDL_ENABLED", "true"))
+        self.ddl_update_interval_seconds = int(get_env("DDL_UPDATE_INTERVAL_SECONDS", "300"))
+        self.ddl_min_time_in_mode_seconds = int(get_env("DDL_MIN_TIME_IN_MODE_SECONDS", "900"))
+        self.ddl_density_window_seconds = int(get_env("DDL_DENSITY_WINDOW_SECONDS", "7200"))
+
+        # DDL thresholds
+        self.ddl_harvest_threshold = float(get_env("DDL_HARVEST_THRESHOLD", "0.70"))
+        self.ddl_harvest_exit_threshold = float(get_env("DDL_HARVEST_EXIT_THRESHOLD", "0.55"))
+        self.ddl_grind_threshold = float(get_env("DDL_GRIND_THRESHOLD", "0.40"))
+        self.ddl_grind_exit_threshold = float(get_env("DDL_GRIND_EXIT_THRESHOLD", "0.30"))
+        self.ddl_defense_threshold = float(get_env("DDL_DEFENSE_THRESHOLD", "0.25"))
+
+        # === Quarantine Configuration ===
+        self.quarantine_failure_threshold = int(get_env("QUARANTINE_FAILURE_THRESHOLD", "3"))
+        self.quarantine_failure_window = int(get_env("QUARANTINE_FAILURE_WINDOW_SECONDS", "1800"))
+        self.quarantine_initial_duration = int(get_env("QUARANTINE_INITIAL_DURATION_SECONDS", "7200"))
+        self.quarantine_extended_duration = int(get_env("QUARANTINE_EXTENDED_DURATION_SECONDS", "86400"))
+        self.quarantine_extended_threshold = int(get_env("QUARANTINE_EXTENDED_THRESHOLD", "3"))
+
+        # === Scratch Exit Configuration ===
+        self.scratch_enabled = self.parse_bool(get_env("SCRATCH_ENABLED", "true"))
+        self.scratch_timeout_harvest = int(get_env("SCRATCH_TIMEOUT_HARVEST_SECONDS", "30"))
+        self.scratch_timeout_grind = int(get_env("SCRATCH_TIMEOUT_GRIND_SECONDS", "60"))
+        self.scratch_timeout_defense = int(get_env("SCRATCH_TIMEOUT_DEFENSE_SECONDS", "20"))
+        self.scratch_timeout_observe = int(get_env("SCRATCH_TIMEOUT_OBSERVE_SECONDS", "60"))
+        self.scratch_min_mfe_pct = float(get_env("SCRATCH_MIN_MFE_PCT", "0.3"))
+        self.scratch_max_mae_pct = float(get_env("SCRATCH_MAX_MAE_PCT", "-0.5"))
+
         if not self.sim_mode:
             if not self.mexc_api_key or not self.mexc_secret_key:
                 raise Exception("Live mode requires MEXC_API_KEY and MEXC_SECRET_KEY in the environment")
