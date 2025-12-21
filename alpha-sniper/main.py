@@ -84,14 +84,14 @@ class AlphaSniperBot:
 
         # Decision Layer (DDL) and Scratch Exit Manager
         if self.config.ddl_enabled:
-            self.ddl = DDL(self.config, self.logger, self.path_manager)
+            self.ddl = DDL(self.config)
             self.logger.info(f"📊 DDL ENABLED | mode={self.ddl.current_mode.value} | density=calculating...")
         else:
             self.ddl = None
             self.logger.info("📊 DDL DISABLED")
 
         if self.config.scratch_enabled:
-            self.scratch_exit_manager = ScratchExitManager(self.config, self.logger)
+            self.scratch_exit_manager = ScratchExitManager(self.config)
             self.logger.info("⚡ SCRATCH EXIT ENABLED | thesis-failure detection active")
         else:
             self.scratch_exit_manager = None
