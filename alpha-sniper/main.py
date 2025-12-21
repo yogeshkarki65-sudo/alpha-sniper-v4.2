@@ -205,10 +205,11 @@ class AlphaSniperBot:
                 mode_changed = self.ddl.update()
                 if mode_changed:
                     density = self.ddl.opportunity_density.calculate_density()
+                    time_in_prev_mode = time.time() - self.ddl.mode_entered_at
                     self.logger.info(
                         f"[DDL_MODE_CHANGE] {old_mode.value} → {self.ddl.current_mode.value} | "
                         f"density={density:.3f} | "
-                        f"time_in_prev_mode={self.ddl.time_in_current_mode():.0f}s"
+                        f"time_in_prev_mode={time_in_prev_mode:.0f}s"
                     )
                     # Send Telegram notification for mode changes
                     try:
@@ -219,7 +220,7 @@ class AlphaSniperBot:
                             f"<b>Previous:</b> {old_mode.value}\n"
                             f"<b>New:</b> {self.ddl.current_mode.value}\n"
                             f"<b>Opportunity Density:</b> {density:.3f}\n"
-                            f"<b>Time in previous mode:</b> {self.ddl.time_in_current_mode():.0f}s\n"
+                            f"<b>Time in previous mode:</b> {time_in_prev_mode:.0f}s\n"
                             f"\n📈 <i>Adaptive behavior adjusting to market conditions</i>"
                         )
                     except Exception as e:
@@ -240,9 +241,7 @@ class AlphaSniperBot:
             if self.ddl and signals:
                 for signal in signals:
                     self.ddl.record_signal(
-                        symbol=signal.get('symbol', 'UNKNOWN'),
-                        engine=signal.get('engine', 'unknown'),
-                        side=signal.get('side', 'unknown'),
+                        timestamp=time.time(),
                         score=signal.get('score', 0),
                         accepted=False  # Will update to True if opened
                     )
@@ -338,8 +337,9 @@ class AlphaSniperBot:
         if not self.ddl:
             return
 
-        mode = self.ddl.current_mode.value
-        overrides = self.ddl.get_parameter_overrides()
+        decision = self.ddl.get_decision()
+        mode = decision['mode'].value
+        overrides = decision['param_overrides']
 
         # Apply overrides to config
         for param, value in overrides.items():
@@ -424,14 +424,17 @@ class AlphaSniperBot:
 
                         # Record scratch in DDL
                         if self.ddl:
+                            # Use position's tracked MFE/MAE or current PnL as estimate
+                            mfe = position.get('max_favorable_excursion', max(0.0, pnl_pct))
+                            mae = position.get('max_adverse_excursion', min(0.0, pnl_pct))
                             self.ddl.record_close(
+                                timestamp=time.time(),
                                 symbol=symbol,
-                                engine=position.get('engine', 'unknown'),
-                                side=side,
-                                win=(pnl_pct > 0),
-                                r_multiple=unrealized_r,
-                                hold_time_seconds=time.time() - timestamp_open,
-                                exit_reason=scratch_reason
+                                entry_time=timestamp_open,
+                                pnl_pct=pnl_pct,
+                                exit_reason=scratch_reason,
+                                max_favorable=mfe,
+                                max_adverse=mae
                             )
                         continue
 
@@ -595,22 +598,24 @@ class AlphaSniperBot:
                 stop_loss = position['stop_loss']
                 timestamp_open = position['timestamp_open']
 
-                # Calculate R-multiple
-                risk_per_unit = abs(entry_price - stop_loss)
+                # Calculate PnL%
                 if side == 'long':
-                    pnl_per_unit = exit_price - entry_price
+                    pnl_pct = ((exit_price / entry_price) - 1) * 100
                 else:
-                    pnl_per_unit = entry_price - exit_price
-                r_multiple = pnl_per_unit / risk_per_unit if risk_per_unit > 0 else 0
+                    pnl_pct = ((entry_price / exit_price) - 1) * 100
+
+                # Use position's tracked MFE/MAE or current PnL as estimate
+                mfe = position.get('max_favorable_excursion', max(0.0, pnl_pct))
+                mae = position.get('max_adverse_excursion', min(0.0, pnl_pct))
 
                 self.ddl.record_close(
+                    timestamp=time.time(),
                     symbol=symbol,
-                    engine=position.get('engine', 'unknown'),
-                    side=side,
-                    win=(r_multiple > 0),
-                    r_multiple=r_multiple,
-                    hold_time_seconds=time.time() - timestamp_open,
-                    exit_reason=reason
+                    entry_time=timestamp_open,
+                    pnl_pct=pnl_pct,
+                    exit_reason=reason,
+                    max_favorable=mfe,
+                    max_adverse=mae
                 )
 
             self.risk_engine.close_position(position, exit_price, reason)
@@ -676,14 +681,17 @@ class AlphaSniperBot:
 
                         # Record scratch in DDL
                         if self.ddl:
+                            # Use position's tracked MFE/MAE or current PnL as estimate
+                            mfe = position.get('max_favorable_excursion', max(0.0, pnl_pct))
+                            mae = position.get('max_adverse_excursion', min(0.0, pnl_pct))
                             self.ddl.record_close(
+                                timestamp=time.time(),
                                 symbol=symbol,
-                                engine=position.get('engine', 'unknown'),
-                                side=side,
-                                win=(pnl_pct > 0),
-                                r_multiple=unrealized_r,
-                                hold_time_seconds=time.time() - timestamp_open,
-                                exit_reason=scratch_reason
+                                entry_time=timestamp_open,
+                                pnl_pct=pnl_pct,
+                                exit_reason=scratch_reason,
+                                max_favorable=mfe,
+                                max_adverse=mae
                             )
                         continue
 
@@ -850,14 +858,24 @@ class AlphaSniperBot:
 
             # Record close in DDL (if not already recorded as scratch)
             if self.ddl and 'scratch' not in reason.lower():
+                # Calculate PnL%
+                if side == 'long':
+                    pnl_pct = ((exit_price / entry) - 1) * 100
+                else:
+                    pnl_pct = ((entry / exit_price) - 1) * 100
+
+                # Use position's tracked MFE/MAE or current PnL as estimate
+                mfe = position.get('max_favorable_excursion', max(0.0, pnl_pct))
+                mae = position.get('max_adverse_excursion', min(0.0, pnl_pct))
+
                 self.ddl.record_close(
+                    timestamp=time.time(),
                     symbol=symbol,
-                    engine=position.get('engine', 'unknown'),
-                    side=side,
-                    win=(r_multiple > 0),
-                    r_multiple=r_multiple,
-                    hold_time_seconds=time.time() - timestamp_open,
-                    exit_reason=reason
+                    entry_time=timestamp_open,
+                    pnl_pct=pnl_pct,
+                    exit_reason=reason,
+                    max_favorable=mfe,
+                    max_adverse=mae
                 )
 
             self.risk_engine.close_position(position, exit_price, reason)
@@ -1143,12 +1161,8 @@ class AlphaSniperBot:
                     # Record entry in DDL
                     if self.ddl:
                         self.ddl.record_entry(
+                            timestamp=time.time(),
                             symbol=position['symbol'],
-                            engine=position['engine'],
-                            side=position['side'],
-                            entry_price=entry_price,
-                            stop_loss=stop_loss,
-                            size_usd=size_usd,
                             score=signal.get('score', 0)
                         )
 
@@ -1207,12 +1221,8 @@ class AlphaSniperBot:
                         # Record entry in DDL
                         if self.ddl:
                             self.ddl.record_entry(
+                                timestamp=time.time(),
                                 symbol=position['symbol'],
-                                engine=position['engine'],
-                                side=position['side'],
-                                entry_price=entry_price,
-                                stop_loss=stop_loss,
-                                size_usd=size_usd,
                                 score=signal.get('score', 0)
                             )
 
