@@ -32,6 +32,8 @@ from signals.scanner import Scanner
 from core.path_manager import PathManager
 from core.ddl import DDL
 from core.scratch_exit import ScratchExitManager
+from core.override_registry import get_override_registry
+from core.safe_equity_sync import SafeEquitySync
 
 
 class AlphaSniperBot:
@@ -97,6 +99,11 @@ class AlphaSniperBot:
             self.scratch_exit_manager = None
             self.logger.info("⚡ SCRATCH EXIT DISABLED")
 
+        # Override Registry and Safe Equity Sync (production hardening)
+        self.override_registry = get_override_registry()
+        self.safe_equity_sync = SafeEquitySync(self.config)
+        self.logger.info("🔒 Safe equity sync and override registry initialized")
+
         # Rate limiting for error notifications (15 min cooldown)
         self.last_error_notification = 0
         self.error_notification_cooldown = 900  # 15 minutes in seconds
@@ -148,26 +155,57 @@ class AlphaSniperBot:
         Main trading cycle - runs every scan interval
         """
         try:
-            # Sync equity from MEXC in LIVE mode
+            # Sync equity from MEXC in LIVE mode (SAFE with catastrophic drop prevention)
             if not self.config.sim_mode:
                 try:
-                    live_equity = self.exchange.get_total_usdt_balance()
-                    if live_equity is not None and live_equity > 0:
+                    sync_result = self.safe_equity_sync.sync_equity(
+                        self.exchange,
+                        self.risk_engine.current_equity,
+                        is_live=True
+                    )
+
+                    if sync_result.success:
                         old_equity = self.risk_engine.current_equity
-                        self.risk_engine.update_equity(live_equity)
+                        self.risk_engine.update_equity(sync_result.final_equity)
+
+                        # Log detailed sync info
+                        self.logger.info(
+                            f"[EQUITY_SYNC] Success | "
+                            f"prev=${old_equity:.2f} | "
+                            f"computed=${sync_result.computed_equity:.2f} | "
+                            f"final=${sync_result.final_equity:.2f} | "
+                            f"coverage={sync_result.pricing_coverage_pct:.1f}% | "
+                            f"priced={sync_result.priced_assets} | "
+                            f"unpriced={sync_result.unpriced_assets}"
+                        )
+
+                        # Warning alerts
+                        if sync_result.warning:
+                            self.logger.warning(f"[EQUITY_SYNC] {sync_result.warning}")
+
+                        # Enter defense if catastrophic drop prevented
+                        if sync_result.should_enter_defense and self.ddl:
+                            self.logger.error(
+                                f"[EQUITY_SYNC] Forcing DDL to DEFENSE mode due to equity sync anomaly"
+                            )
+                            from core.ddl import DDLMode
+                            self.ddl.current_mode = DDLMode.DEFENSE
+                            self.ddl.mode_entered_at = time.time()
 
                         # Send enhanced Telegram notification on first equity sync
-                        if not self.first_equity_sync_notified and abs(old_equity - self.config.starting_equity) < 0.01 and abs(live_equity - old_equity) > 0.01:
+                        if not self.first_equity_sync_notified and abs(old_equity - self.config.starting_equity) < 0.01 and abs(sync_result.final_equity - old_equity) > 0.01:
                             self.alert_mgr.send_equity_sync(
                                 config_equity=self.config.starting_equity,
-                                mexc_balance=live_equity
+                                mexc_balance=sync_result.final_equity
                             )
                             self.logger.info(f"[TELEGRAM] Sent enhanced equity sync notification")
                             self.first_equity_sync_notified = True
                     else:
-                        self.logger.warning("⚠️ Failed to fetch MEXC balance, using cached equity")
+                        self.logger.warning("⚠️ Safe equity sync failed, using cached equity")
                 except Exception as e:
-                    self.logger.error(f"⚠️ Error syncing MEXC equity: {e}, using cached equity")
+                    self.logger.error(f"⚠️ Error in safe equity sync: {e}, using cached equity")
+                    import traceback
+                    self.logger.debug(traceback.format_exc())
 
             # Enhanced cycle header with key info
             cycle_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -331,8 +369,8 @@ class AlphaSniperBot:
 
     def _apply_ddl_overrides(self):
         """
-        Apply parameter overrides based on current DDL mode
-        Modifies self.config temporarily for this trading cycle
+        Apply parameter overrides based on current DDL mode using OverrideRegistry.
+        Safely validates and applies overrides to appropriate targets.
         """
         if not self.ddl:
             return
@@ -341,20 +379,22 @@ class AlphaSniperBot:
         mode = decision['mode'].value
         overrides = decision['param_overrides']
 
-        # Apply overrides to config
-        for param, value in overrides.items():
-            if hasattr(self.config, param):
-                old_value = getattr(self.config, param)
-                setattr(self.config, param, value)
-                self.logger.debug(f"[DDL_OVERRIDE] {param}: {old_value} → {value} (mode={mode})")
-            else:
-                self.logger.warning(f"[DDL_OVERRIDE] Unknown parameter: {param}")
-
-        self.logger.info(
-            f"[DDL_ACTIVE] mode={mode} | "
-            f"max_positions={self.config.max_concurrent_positions} | "
-            f"risk_multiplier={overrides.get('risk_multiplier', 1.0):.2f}"
+        # Apply overrides using centralized registry (safe with bounds checking)
+        applied = self.override_registry.apply_overrides(
+            overrides=overrides,
+            config=self.config,
+            scratch_manager=self.scratch_exit_manager,
+            is_live=not self.config.sim_mode
         )
+
+        # Log active overrides with final values
+        if applied:
+            applied_str = ' | '.join([f"{k}={v}" for k, v in applied.items()])
+            self.logger.info(
+                f"[DDL_ACTIVE] mode={mode} | {applied_str}"
+            )
+        else:
+            self.logger.info(f"[DDL_ACTIVE] mode={mode} | no overrides applied")
 
     def _manage_positions(self):
         """
@@ -1105,6 +1145,31 @@ class AlphaSniperBot:
                 # Calculate position size
                 size_usd = self.risk_engine.calculate_position_size(signal, entry_price, stop_loss)
 
+                # Apply DDL runtime overrides
+                runtime_overrides = getattr(self.config, 'ddl_runtime_overrides', {})
+
+                # Apply position_size_multiplier
+                if 'position_size_multiplier' in runtime_overrides:
+                    multiplier = runtime_overrides['position_size_multiplier']
+                    original_size = size_usd
+                    size_usd = size_usd * multiplier
+                    self.logger.debug(f"[DDL_RUNTIME] position_size_multiplier={multiplier:.2f}: ${original_size:.2f} → ${size_usd:.2f}")
+
+                # Apply min_score_multiplier (reject if score too low)
+                if 'min_score_multiplier' in runtime_overrides:
+                    multiplier = runtime_overrides['min_score_multiplier']
+                    # Assume baseline min score from config or default to 0.5
+                    baseline_min_score = getattr(self.config, 'min_signal_score', 0.5)
+                    adjusted_min_score = baseline_min_score * multiplier
+                    signal_score = signal.get('score', 0)
+                    if signal_score < adjusted_min_score:
+                        self.logger.debug(
+                            f"❌ Signal score too low for {signal['symbol']}: "
+                            f"{signal_score:.2f} < {adjusted_min_score:.2f} "
+                            f"(baseline={baseline_min_score:.2f}, multiplier={multiplier:.2f})"
+                        )
+                        continue
+
                 # Minimum position size (adjusted for account size)
                 min_position_size = max(1.0, self.config.starting_equity * 0.01)  # 1% of equity or $1, whichever is higher
                 if size_usd < min_position_size:
@@ -1116,6 +1181,9 @@ class AlphaSniperBot:
                 equity_at_entry = self.risk_engine.current_equity
                 initial_risk_usd = equity_at_entry * risk_pct
                 qty = size_usd / entry_price if entry_price > 0 else 0
+
+                # Apply max_hold_hours override
+                max_hold_hours = runtime_overrides.get('max_hold_hours', signal.get('max_hold_hours', 48))
 
                 # Create position object
                 position = {
@@ -1134,7 +1202,7 @@ class AlphaSniperBot:
                     'score': signal.get('score', 0),
                     'regime': signal.get('regime', ''),
                     'timestamp_open': time.time(),
-                    'max_hold_hours': signal.get('max_hold_hours', 48)
+                    'max_hold_hours': max_hold_hours
                 }
 
                 # Place order (SIM or LIVE)
