@@ -38,7 +38,7 @@ StandardError=journal
 ReadWritePaths=/var/lib/alpha-sniper
 ReadWritePaths=/opt/alpha-sniper/logs
 ReadWritePaths=/opt/alpha-sniper/reports
-ReadWritePaths=/opt/alpha-sniper/alpha-sniper/__pycache__
+# Note: __pycache__ removed - using PYTHONDONTWRITEBYTECODE instead
 
 # Resource limits
 MemoryMax=2G
@@ -46,6 +46,7 @@ TimeoutStopSec=30
 
 # Python settings
 Environment="PYTHONUNBUFFERED=1"
+Environment="PYTHONDONTWRITEBYTECODE=1"
 # Data directory (tells PathManager to use /var/lib/alpha-sniper)
 Environment="ALPHA_SNIPER_DATA_DIR=/var/lib/alpha-sniper"
 

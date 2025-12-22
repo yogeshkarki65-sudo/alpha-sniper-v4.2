@@ -40,6 +40,9 @@ class OrderExecutor:
         self.max_retries = 2
         self.initial_backoff = 1.0  # seconds
 
+        # Cache market limits for validation
+        self.market_limits_cache = {}  # {symbol: {minNotional, minAmount, precision}}
+
     def execute_order(
         self,
         symbol: str,
@@ -57,8 +60,8 @@ class OrderExecutor:
         - Failure: (None, failure_reason)
         """
 
-        # Pre-flight validation
-        if not self._validate_inputs(symbol, amount):
+        # Pre-flight validation (with price for notional check)
+        if not self._validate_inputs(symbol, amount, price):
             return None, OrderFailureReason.INVALID_ORDER_SIZE
 
         # Check quarantine
@@ -122,12 +125,73 @@ class OrderExecutor:
 
         return None, last_error or OrderFailureReason.UNKNOWN
 
-    def _validate_inputs(self, symbol: str, amount: float) -> bool:
-        """Validate order inputs."""
+    def _get_market_limits(self, symbol: str) -> Dict[str, Any]:
+        """Get market limits for symbol (cached)."""
+        if symbol in self.market_limits_cache:
+            return self.market_limits_cache[symbol]
+
+        try:
+            markets = self.exchange.get_markets()
+            if markets and symbol in markets:
+                market = markets[symbol]
+                limits = {
+                    'min_notional': market.get('limits', {}).get('cost', {}).get('min', 0) or 5.0,  # Default $5
+                    'min_amount': market.get('limits', {}).get('amount', {}).get('min', 0) or 0.0001,
+                    'precision_amount': market.get('precision', {}).get('amount', 8),
+                    'precision_price': market.get('precision', {}).get('price', 8),
+                }
+                self.market_limits_cache[symbol] = limits
+                return limits
+        except Exception as e:
+            self.logger.debug(f"[ORDER_LIMITS] Could not fetch limits for {symbol}: {e}")
+
+        # Return conservative defaults
+        return {
+            'min_notional': 5.0,  # $5 minimum
+            'min_amount': 0.0001,
+            'precision_amount': 8,
+            'precision_price': 8,
+        }
+
+    def _validate_inputs(self, symbol: str, amount: float, price: Optional[float] = None) -> bool:
+        """Validate order inputs against exchange limits."""
+        # Basic type checks
         if not symbol or not isinstance(symbol, str):
+            self.logger.error(f"[ORDER_VALIDATE] Invalid symbol: {symbol}")
             return False
-        if amount <= 0 or not isinstance(amount, (int, float)):
+
+        if not isinstance(amount, (int, float)):
+            self.logger.error(f"[ORDER_VALIDATE] Invalid amount type: {type(amount)}")
             return False
+
+        # CRITICAL: Check for zero/negative amount
+        if amount <= 0:
+            self.logger.error(
+                f"[ORDER_VALIDATE] REJECTED: {symbol} amount={amount} <= 0 | "
+                f"This would cause 'Amount can not be less than zero' error from MEXC"
+            )
+            return False
+
+        # Get market limits
+        limits = self._get_market_limits(symbol)
+
+        # Check minimum amount
+        if amount < limits['min_amount']:
+            self.logger.error(
+                f"[ORDER_VALIDATE] REJECTED: {symbol} amount={amount} < min={limits['min_amount']}"
+            )
+            return False
+
+        # Check minimum notional (amount * price)
+        if price:
+            notional = amount * price
+            if notional < limits['min_notional']:
+                self.logger.error(
+                    f"[ORDER_VALIDATE] REJECTED: {symbol} notional=${notional:.2f} < min=${limits['min_notional']:.2f} | "
+                    f"amount={amount}, price={price}"
+                )
+                return False
+
         return True
 
     def _validate_response(

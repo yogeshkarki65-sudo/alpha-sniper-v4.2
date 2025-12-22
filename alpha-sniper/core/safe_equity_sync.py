@@ -277,21 +277,48 @@ class SafeEquitySync:
             total_value_usdt = usdt_balance
             other_assets_value = 0.0
 
+            # Log USDT balance clearly
+            logger.info(f"[EQUITY_SYNC] USDT balance: free=${usdt_free:.2f}, used=${usdt_used:.2f}, total=${usdt_balance:.2f}")
+
             # Track pricing results
             priced_assets = []
             unpriced_assets = []
             priced_count = 0
             unpriced_count = 0
 
+            # Log ALL assets in balance (for diagnostics)
+            asset_count = 0
+            for asset, asset_balance in balance.items():
+                # Skip metadata keys
+                if asset in ['info', 'free', 'used', 'total', 'USDT', 'datetime', 'timestamp']:
+                    continue
+
+                # Check if this is actually an asset balance dict
+                if not isinstance(asset_balance, dict):
+                    continue
+
+                total_amount = asset_balance.get('total', 0) or 0
+                asset_count += 1
+
+                # Log ALL non-zero holdings (even dust)
+                if total_amount > 0:
+                    logger.debug(f"[EQUITY_SYNC] Found holding: {asset} = {total_amount:.8f}")
+
+            logger.info(f"[EQUITY_SYNC] Total assets found in balance: {asset_count}")
+
             # Convert all other assets
             for asset, asset_balance in balance.items():
                 # Skip USDT and metadata
-                if asset == 'USDT' or asset in ['info', 'free', 'used', 'total']:
+                if asset == 'USDT' or asset in ['info', 'free', 'used', 'total', 'datetime', 'timestamp']:
+                    continue
+
+                # Verify this is a balance dict
+                if not isinstance(asset_balance, dict):
                     continue
 
                 try:
                     total_amount = asset_balance.get('total', 0) or 0
-                    if total_amount <= 0 or total_amount < 0.00001:  # Skip dust
+                    if total_amount <= 0 or total_amount < 0.00000001:  # Skip zero/dust
                         continue
 
                     # Try to get price
@@ -311,21 +338,36 @@ class SafeEquitySync:
                                 'price': price,
                                 'value_usdt': asset_value_usdt
                             })
+                            # Log each priced asset
+                            logger.info(
+                                f"[EQUITY_SYNC] Priced: {asset} | "
+                                f"amt={total_amount:.8f} | "
+                                f"price=${price:.6f} | "
+                                f"value=${asset_value_usdt:.2f}"
+                            )
                         else:
                             # Price is 0
                             unpriced_count += 1
                             unpriced_assets.append(asset)
-                            logger.debug(f"[EQUITY_SYNC] Asset {asset} has zero price")
+                            logger.warning(
+                                f"[EQUITY_SYNC] Asset {asset} has ZERO price | "
+                                f"amt={total_amount:.8f} | "
+                                f"symbol={symbol}"
+                            )
                     else:
                         # Ticker fetch failed
                         unpriced_count += 1
                         unpriced_assets.append(asset)
-                        logger.debug(f"[EQUITY_SYNC] Could not fetch ticker for {asset}")
+                        logger.warning(
+                            f"[EQUITY_SYNC] Could not fetch ticker for {asset} | "
+                            f"amt={total_amount:.8f} | "
+                            f"symbol={symbol}"
+                        )
 
                 except Exception as e:
                     unpriced_count += 1
                     unpriced_assets.append(asset)
-                    logger.debug(f"[EQUITY_SYNC] Error pricing {asset}: {e}")
+                    logger.error(f"[EQUITY_SYNC] Error pricing {asset}: {e}")
 
             # Log detailed breakdown
             logger.info(
@@ -338,14 +380,14 @@ class SafeEquitySync:
             )
 
             if priced_assets:
-                top_holdings = sorted(priced_assets, key=lambda x: x['value_usdt'], reverse=True)[:5]
+                top_holdings = sorted(priced_assets, key=lambda x: x['value_usdt'], reverse=True)[:10]
                 holdings_str = ' | '.join([
                     f"{h['asset']}=${h['value_usdt']:.2f}" for h in top_holdings
                 ])
                 logger.info(f"[EQUITY_SYNC] Top holdings: {holdings_str}")
 
             if unpriced_assets:
-                logger.warning(f"[EQUITY_SYNC] Unpriced assets: {', '.join(unpriced_assets)}")
+                logger.error(f"[EQUITY_SYNC] UNPRICED ASSETS: {', '.join(unpriced_assets)}")
 
             return {
                 'success': True,
@@ -360,7 +402,10 @@ class SafeEquitySync:
 
         except Exception as e:
             logger.error(f"[EQUITY_SYNC] Error computing portfolio value: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return {'success': False}
+
 
     def is_sync_anomaly_active(self) -> bool:
         """Check if sync anomaly is currently active (prevents daily loss logic)."""
