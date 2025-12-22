@@ -46,6 +46,8 @@ TimeoutStopSec=30
 
 # Python settings
 Environment="PYTHONUNBUFFERED=1"
+# Data directory (tells PathManager to use /var/lib/alpha-sniper)
+Environment="ALPHA_SNIPER_DATA_DIR=/var/lib/alpha-sniper"
 
 [Install]
 WantedBy=multi-user.target

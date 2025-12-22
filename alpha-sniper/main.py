@@ -161,7 +161,8 @@ class AlphaSniperBot:
                     sync_result = self.safe_equity_sync.sync_equity(
                         self.exchange,
                         self.risk_engine.current_equity,
-                        is_live=True
+                        is_live=True,
+                        config_starting_equity=self.config.starting_equity
                     )
 
                     if sync_result.success:

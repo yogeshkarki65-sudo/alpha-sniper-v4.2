@@ -68,7 +68,8 @@ class SafeEquitySync:
         self,
         exchange,
         current_equity: float,
-        is_live: bool
+        is_live: bool,
+        config_starting_equity: float = None
     ) -> EquitySyncResult:
         """
         Safely sync equity from exchange with validation.
@@ -77,6 +78,7 @@ class SafeEquitySync:
             exchange: Exchange instance
             current_equity: Current equity value
             is_live: Whether running in LIVE mode
+            config_starting_equity: Config's starting_equity (to detect first run)
 
         Returns:
             EquitySyncResult with validated equity and diagnostics
@@ -129,6 +131,35 @@ class SafeEquitySync:
 
         # Calculate deviation from current equity
         deviation_pct = abs((computed_equity - current_equity) / current_equity * 100) if current_equity > 0 else 0
+
+        # FIRST RUN DETECTION: If current_equity == config_starting_equity, this is first sync
+        # In LIVE mode, config starting_equity is irrelevant - use MEXC balance as truth
+        is_first_run = (config_starting_equity is not None and
+                       abs(current_equity - config_starting_equity) < 1.0 and
+                       self.last_valid_equity is None)
+
+        if is_first_run:
+            logger.info(
+                f"[EQUITY_SYNC] FIRST RUN DETECTED: "
+                f"config_starting_equity=${config_starting_equity:.2f}, "
+                f"MEXC_balance=${computed_equity:.2f}. "
+                f"Using MEXC balance as baseline (ignoring config value in LIVE mode)."
+            )
+            # Accept MEXC balance as ground truth on first run
+            self.last_valid_equity = computed_equity
+            return EquitySyncResult(
+                success=True,
+                final_equity=computed_equity,
+                computed_equity=computed_equity,
+                reported_equity=None,
+                deviation_pct=0.0,  # No deviation on first run
+                pricing_coverage_pct=pricing_coverage_pct,
+                priced_assets=priced_assets,
+                unpriced_assets=unpriced_assets,
+                unpriced_symbols=unpriced_symbols,
+                warning=None,
+                should_enter_defense=False
+            )
 
         # Sanity checks
         warning = None
