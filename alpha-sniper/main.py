@@ -1479,13 +1479,9 @@ class AlphaSniperBot:
 
     async def scan_loop(self):
         """
-        SCAN LOOP (slow, CPU-heavy)
-        - Runs every SCAN_INTERVAL_SECONDS (e.g. 300s)
-        - Updates regime
-        - Scans universe for signals
-        - Opens new positions
-        - Runs DFE daily at 00:05 UTC
-        - Supports FAST_MODE with auto-disable
+        Manage the periodic full scanning cycle that updates regime, scans for signals, and opens new positions.
+        
+        Runs the main trading cycle at the configured scan interval (fast or normal), updates self.last_scan_time for drift detection, executes scheduled Dynamic Filter Engine (DFE) work daily at 00:05 UTC when enabled, and automatically disables fast mode after the configured maximum runtime (sending a Telegram notification when that occurs). Scheduled tasks are processed each loop iteration and the method applies a backoff on uncaught errors to avoid rapid repeated failures.
         """
         self.logger.info("🔄 SCAN LOOP started")
 
@@ -1558,11 +1554,9 @@ class AlphaSniperBot:
 
     async def position_loop(self):
         """
-        POSITION LOOP (fast, lightweight)
-        - Runs every POSITION_CHECK_INTERVAL_SECONDS (e.g. 15s)
-        - Checks SL/TP for open positions only
-        - Does NOT scan universe or generate signals
-        - Does NOT update regime or filters
+        Continuously performs lightweight position maintenance tasks at the configured interval.
+        
+        Performs stop-loss / take-profit checks for open positions, processes pending Entry-DETE signals when enabled, updates pump-based trailing stops, and persists positions when any are open. On startup the loop waits position_check_interval_seconds to avoid conflicting with the initial scan; it then repeats these checks while the bot is running and backs off briefly on unexpected errors.
         """
         self.logger.info("⚡ POSITION LOOP (Fast Stop Manager) started")
 

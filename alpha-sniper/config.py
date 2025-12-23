@@ -236,12 +236,24 @@ class Config:
 
     def get_pump_thresholds(self, regime: str) -> PumpThresholds:
         """
-        Get regime-specific pump thresholds with fallback logic:
-        1. Try regime-specific env var (e.g., PUMP_STRONG_BULL_MIN_SCORE)
-        2. Fall back to base env var (e.g., PUMP_MIN_SCORE)
-        3. Fall back to regime-based default (Grok's suggestions)
-
-        Supported regimes: STRONG_BULL, SIDEWAYS, MILD_BEAR, FULL_BEAR
+        Compute pump-signal threshold values for a named market regime, applying environment-variable overrides.
+        
+        Supported regime names (case-insensitive, spaces allowed): STRONG_BULL (alias PUMPY), SIDEWAYS (alias NEUTRAL), MILD_BEAR, FULL_BEAR (alias BEAR). For an unknown regime, SIDEWAYS defaults are used. Environment overrides are applied in this order: regime-specific env var (PUMP_<REGIME>_<PARAM>), base env var (PUMP_<PARAM>), then the built-in regime default.
+        
+        Parameters:
+            regime (str): Regime identifier used to select defaults.
+        
+        Returns:
+            PumpThresholds: Threshold values with the following fields:
+                - min_24h_quote_volume: minimum 24h quote volume required.
+                - min_score: minimum pump score required.
+                - min_rvol: minimum relative volume required.
+                - min_24h_return: minimum 24h return (percentage-format value).
+                - max_24h_return: maximum 24h return (percentage-format value).
+                - min_momentum: minimum momentum required.
+                - new_listing_min_rvol: min rvol for new listings.
+                - new_listing_min_score: min score for new listings.
+                - new_listing_min_momentum: min momentum for new listings.
         """
         regime_upper = regime.upper().replace(' ', '_')
 
