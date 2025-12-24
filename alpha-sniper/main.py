@@ -1170,21 +1170,113 @@ class AlphaSniperBot:
                         )
                         continue
 
-                # Minimum position size (adjusted for account size)
-                # For small accounts, allow smaller positions but respect exchange minimums
-                min_position_size = max(0.10, self.config.starting_equity * 0.005)  # 0.5% of equity or $0.10, whichever is higher
-                if size_usd < min_position_size:
+                # === DETAILED SIZING CALCULATION & VALIDATION ===
+                symbol = signal['symbol']
+                engine = signal['engine']
+                side = signal['side']
+                equity_at_entry = self.risk_engine.current_equity
+                risk_pct = self.risk_engine.get_risk_per_trade(engine)
+                risk_budget_usd = equity_at_entry * risk_pct
+
+                # Calculate stop distance
+                stop_distance_pct = abs(entry_price - stop_loss) / entry_price if entry_price > 0 else 0.08
+
+                # Calculate initial quantity and notional
+                qty = size_usd / entry_price if entry_price > 0 else 0
+                notional = qty * entry_price
+
+                # Get market limits from exchange
+                try:
+                    markets = self.exchange.get_markets()
+                    market = markets.get(symbol, {})
+                    limits = market.get('limits', {})
+                    min_notional = limits.get('cost', {}).get('min', 5.0) or 5.0
+                    min_amount = limits.get('amount', {}).get('min', 0.0001) or 0.0001
+                    precision_amount = market.get('precision', {}).get('amount', 8) or 8
+                    precision_price = market.get('precision', {}).get('price', 8) or 8
+                except Exception as e:
+                    # Fallback to safe defaults
+                    min_notional = 5.0
+                    min_amount = 0.0001
+                    precision_amount = 8
+                    precision_price = 8
+                    self.logger.debug(f"[SIZING] Could not fetch limits for {symbol}: {e}")
+
+                # === SIZING DIAGNOSTIC LOG ===
+                self.logger.info(
+                    f"[SIZING] {symbol} {side} {engine} | "
+                    f"equity=${equity_at_entry:.2f} | "
+                    f"risk_budget=${risk_budget_usd:.4f} ({risk_pct*100:.3f}%) | "
+                    f"stop_dist={stop_distance_pct*100:.2f}% | "
+                    f"qty={qty:.8f} | "
+                    f"price=${entry_price:.6f} | "
+                    f"notional=${notional:.2f} | "
+                    f"min_notional=${min_notional:.2f} | "
+                    f"min_amount={min_amount:.8f}"
+                )
+
+                # === VALIDATION: Check minimums ===
+                # Check 1: Amount > 0
+                if qty <= 0:
                     self.logger.info(
-                        f"[SIGNAL_REJECTED] {signal['symbol']} {signal['engine']} | "
-                        f"reason=position_too_small | size_usd=${size_usd:.2f} < min=${min_position_size:.2f}"
+                        f"[SIGNAL_REJECTED] {symbol} {engine} | "
+                        f"reason=invalid_quantity | qty={qty:.8f} <= 0"
                     )
                     continue
 
-                # Calculate risk % and quantities
-                risk_pct = self.risk_engine.get_risk_per_trade(signal.get('engine', 'standard'))
-                equity_at_entry = self.risk_engine.current_equity
+                # Check 2: Amount >= min_amount
+                if qty < min_amount:
+                    self.logger.info(
+                        f"[SIGNAL_REJECTED] {symbol} {engine} | "
+                        f"reason=below_min_amount | qty={qty:.8f} < min={min_amount:.8f}"
+                    )
+                    continue
+
+                # Check 3: Notional >= min_notional (with optional bump)
+                if notional < min_notional:
+                    # Try to bump to minimum notional if enabled
+                    if self.config.allow_min_notional_bump:
+                        # Calculate bumped values
+                        bumped_qty = min_notional / entry_price
+                        bumped_notional = bumped_qty * entry_price
+                        bumped_worst_case_loss = bumped_notional * stop_distance_pct
+                        max_allowed_loss = risk_budget_usd * self.config.min_notional_bump_tolerance
+
+                        if bumped_worst_case_loss <= max_allowed_loss:
+                            # Bump is safe
+                            old_notional = notional
+                            qty = bumped_qty
+                            notional = bumped_notional
+                            size_usd = bumped_notional
+                            self.logger.info(
+                                f"[SIZING_BUMP] {symbol} | "
+                                f"original_notional=${old_notional:.2f} → bumped=${bumped_notional:.2f} | "
+                                f"worst_case_loss=${bumped_worst_case_loss:.4f} <= max=${max_allowed_loss:.4f} | "
+                                f"status=SAFE_BUMP"
+                            )
+                        else:
+                            # Bump would exceed risk tolerance
+                            self.logger.info(
+                                f"[SIGNAL_REJECTED] {symbol} {engine} | "
+                                f"reason=notional_bump_unsafe | "
+                                f"original=${notional:.2f} | "
+                                f"min_notional=${min_notional:.2f} | "
+                                f"bumped_loss=${bumped_worst_case_loss:.4f} > max=${max_allowed_loss:.4f}"
+                            )
+                            continue
+                    else:
+                        # Bump disabled, reject
+                        self.logger.info(
+                            f"[SIGNAL_REJECTED] {symbol} {engine} | "
+                            f"reason=below_min_notional | "
+                            f"notional=${notional:.2f} < min=${min_notional:.2f} | "
+                            f"hint=enable ALLOW_MIN_NOTIONAL_BUMP to auto-bump (with safety checks)"
+                        )
+                        continue
+
+                # === POSITION VALIDATED, UPDATE VALUES ===
+                size_usd = notional  # Use validated notional
                 initial_risk_usd = equity_at_entry * risk_pct
-                qty = size_usd / entry_price if entry_price > 0 else 0
 
                 # Apply max_hold_hours override
                 max_hold_hours = runtime_overrides.get('max_hold_hours', signal.get('max_hold_hours', 48))
@@ -1311,119 +1403,26 @@ class AlphaSniperBot:
                                 score=signal.get('score', 0)
                             )
 
-                        # EXCHANGE STOP ORDER PLACEMENT (with fallback)
-                        # Attempt to place exchange-native stop order for additional protection
-                        # Synthetic hard stop remains active regardless of exchange stop success/failure
+                        # === PROTECTION STRATEGY ===
+                        # MEXC spot does not reliably support stop_limit orders (causes "invalid type" errors)
+                        # We rely exclusively on synthetic watchdog for guaranteed protection
+                        # Watchdog checks every N seconds and enforces PUMP_MAX_LOSS_PCT hard stop
                         engine = position.get('engine', '')
                         if engine == 'pump':
-                            try:
-                                # Calculate stop price based on config hard stop percentage
-                                stop_price = entry_price * (1 - self.config.pump_max_loss_pct) if position['side'] == 'long' else entry_price * (1 + self.config.pump_max_loss_pct)
-                                stop_side = 'sell' if position['side'] == 'long' else 'buy'
+                            hard_stop_pct = self.config.get_pump_max_loss_pct(self.risk_engine.current_regime or 'SIDEWAYS')
+                            if position['side'] == 'long':
+                                hard_stop_price = entry_price * (1 - hard_stop_pct)
+                            else:
+                                hard_stop_price = entry_price * (1 + hard_stop_pct)
 
-                                # Try placing exchange stop-limit order
-                                # Note: MEXC Spot may or may not support this - we handle gracefully
-                                stop_order = self.exchange.create_order(
-                                    symbol=position['symbol'],
-                                    type='stop_limit',
-                                    side=stop_side,
-                                    amount=amount,
-                                    price=stop_price * 0.99 if position['side'] == 'long' else stop_price * 1.01,  # Limit price slightly worse
-                                    params={
-                                        'stopPrice': stop_price,
-                                        'leverage': 1
-                                    }
-                                )
-
-                                if stop_order and stop_order.get('id'):
-                                    position['exchange_stop_order_id'] = stop_order['id']
-                                    self.logger.info(
-                                        f"[STOP_PLACED] {position['symbol']} {position['side']} | "
-                                        f"stop_price={stop_price:.6f} | "
-                                        f"order_id={stop_order['id']} | "
-                                        f"type=exchange_native"
-                                    )
-                                else:
-                                    self.logger.warning(
-                                        f"[STOP_BLOCKED] {position['symbol']} {position['side']} | "
-                                        f"reason=exchange_returned_no_order_id | "
-                                        f"synthetic_protection=ACTIVE"
-                                    )
-                            except Exception as e:
-                                # Exchange stop placement failed - log and continue with synthetic only
-                                error_msg = str(e)
-                                self.logger.warning(
-                                    f"[STOP_BLOCKED] {position['symbol']} {position['side']} | "
-                                    f"reason={error_msg[:100]} | "
-                                    f"synthetic_protection=ACTIVE"
-                                )
-
-                        # POSITION PROTECTION AUDIT LOG
-                        # Comprehensive logging of all protective measures for this position
-                        exchange_stop_status = "PLACED" if position.get('exchange_stop_order_id') else "BLOCKED"
-                        exchange_stop_detail = (
-                            f"order_id={position.get('exchange_stop_order_id')}"
-                            if exchange_stop_status == "PLACED"
-                            else "using_synthetic_only"
-                        )
-
-                        self.logger.info(
-                            f"[POSITION_PROTECT] {position['symbol']} {position['side']} {position['engine'].upper()} | "
-                            f"min_stop_pct={self.config.pump_max_loss_pct*100 if engine == 'pump' else 'N/A'}% | "
-                            f"desired_exchange_stop={f'{self.config.pump_max_loss_pct*100}%' if engine == 'pump' else 'N/A'} | "
-                            f"exchange_stop_status={exchange_stop_status} ({exchange_stop_detail}) | "
-                            f"synthetic_hard_stop={f'ACTIVE_{self.config.pump_max_loss_pct*100}%' if engine == 'pump' else 'N/A'} | "
-                            f"max_hold={position.get('max_hold_hours', 48)}h | "
-                            f"entry={entry_price:.6f} | "
-                            f"stop={stop_loss:.6f} | "
-                            f"protection=FULL"
-                        )
-
-                        # Send Telegram notification for stop placement status (pump trades only)
-                        if engine == 'pump':
-                            try:
-                                stop_pct = self.config.pump_max_loss_pct * 100
-                                if exchange_stop_status == "PLACED":
-                                    stop_msg = (
-                                        f"🛡️ PUMP PROTECTION ARMED\n"
-                                        f"Symbol: {position['symbol']}\n"
-                                        f"Side: {position['side'].upper()}\n"
-                                        f"Entry: ${entry_price:.6f}\n"
-                                        f"━━━━━━━━━━━━━━━━━━\n"
-                                        f"✅ Exchange Stop: PLACED\n"
-                                        f"   Stop Price: ${stop_price:.6f} ({stop_pct:.1f}%)\n"
-                                        f"   Order ID: {position.get('exchange_stop_order_id')}\n"
-                                        f"🛡️ Synthetic Watchdog: ACTIVE ({stop_pct:.1f}%)\n"
-                                        f"━━━━━━━━━━━━━━━━━━\n"
-                                        f"DOUBLE PROTECTION: Exchange + Watchdog"
-                                    )
-                                else:
-                                    stop_msg = (
-                                        f"🛡️ PUMP PROTECTION ARMED\n"
-                                        f"Symbol: {position['symbol']}\n"
-                                        f"Side: {position['side'].upper()}\n"
-                                        f"Entry: ${entry_price:.6f}\n"
-                                        f"━━━━━━━━━━━━━━━━━━\n"
-                                        f"⚠️ Exchange Stop: BLOCKED\n"
-                                        f"   (Exchange constraints or unsupported)\n"
-                                        f"🛡️ Synthetic Watchdog: ACTIVE ({stop_pct:.1f}%)\n"
-                                        f"   Hard Stop: ${stop_price:.6f}\n"
-                                        f"━━━━━━━━━━━━━━━━━━\n"
-                                        f"FALLBACK PROTECTION: Watchdog monitoring active\n"
-                                        f"Max loss GUARANTEED at {stop_pct:.1f}%"
-                                    )
-
-                                # Send via Telegram
-                                import requests
-                                if self.config.telegram_bot_token and self.config.telegram_chat_id:
-                                    requests.post(
-                                        f"https://api.telegram.org/bot{self.config.telegram_bot_token}/sendMessage",
-                                        json={"chat_id": self.config.telegram_chat_id, "text": stop_msg},
-                                        timeout=5
-                                    )
-                                    self.logger.info(f"[TELEGRAM] Sent pump protection status for {position['symbol']}")
-                            except Exception as e:
-                                self.logger.warning(f"[TELEGRAM] Failed to send pump protection alert: {e}")
+                            self.logger.info(
+                                f"[PROTECTION] {position['symbol']} {position['side']} {engine.upper()} | "
+                                f"synthetic_watchdog=ACTIVE | "
+                                f"hard_stop={hard_stop_pct*100:.1f}% | "
+                                f"stop_price=${hard_stop_price:.6f} | "
+                                f"check_interval={self.config.pump_max_loss_watchdog_interval}s | "
+                                f"max_hold={position.get('max_hold_hours', 24)}h"
+                            )
 
                         # Send enhanced Telegram notification for LIVE open
                         try:

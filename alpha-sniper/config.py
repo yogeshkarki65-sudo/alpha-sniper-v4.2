@@ -2,7 +2,7 @@ import os
 import re
 from dataclasses import dataclass
 from typing import Optional
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 
 
 @dataclass
@@ -21,7 +21,33 @@ class PumpThresholds:
 
 class Config:
     def __init__(self):
-        load_dotenv()
+        # === CONFIG SOURCE DETECTION ===
+        # Detect which .env file (if any) will be loaded
+        # Systemd EnvironmentFile sets env vars BEFORE Python starts, so they always win
+        dotenv_path = find_dotenv()
+        dotenv_loaded = False
+
+        # Check if SIM_MODE is already set by systemd (before dotenv)
+        sim_mode_from_system = os.getenv("SIM_MODE")
+
+        if dotenv_path:
+            # Load dotenv (don't override existing env vars from systemd)
+            load_dotenv(dotenv_path, override=False)
+            dotenv_loaded = True
+            print(f"[CONFIG_INIT] Loaded dotenv from: {dotenv_path}")
+        else:
+            print(f"[CONFIG_INIT] No .env file found, using system environment only")
+
+        # Detect config source for SIM_MODE
+        sim_mode_after_dotenv = os.getenv("SIM_MODE")
+        if sim_mode_from_system:
+            config_source = "systemd_env"
+        elif dotenv_loaded and not sim_mode_from_system:
+            config_source = f"dotenv ({dotenv_path})"
+        else:
+            config_source = "default"
+
+        print(f"[CONFIG_SOURCE] SIM_MODE={sim_mode_after_dotenv} from {config_source}")
 
         # Helper to safely parse env values (strips whitespace and inline comments)
         def get_env(key, default=""):
@@ -166,6 +192,12 @@ class Config:
 
         # === PUMP DEBUG LOGGING ===
         self.pump_debug_logging = self.parse_bool(get_env("PUMP_DEBUG_LOGGING", "false"))
+
+        # === POSITION SIZING SAFETY ===
+        # Allow bumping position size to meet exchange minimum notional
+        # Only enabled if bumped notional stays within risk_budget * tolerance
+        self.allow_min_notional_bump = self.parse_bool(get_env("ALLOW_MIN_NOTIONAL_BUMP", "false"))
+        self.min_notional_bump_tolerance = float(get_env("MIN_NOTIONAL_BUMP_TOLERANCE", "1.10"))  # 10% over risk budget max
 
         # === PERFORMANCE OPTIMIZATIONS ===
         # Caching and rate limiting to reduce API calls and improve scan speed
