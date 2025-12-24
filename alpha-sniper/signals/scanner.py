@@ -202,9 +202,16 @@ class Scanner:
                         continue
 
                 # === BLACKLIST FILTER (symbols causing API errors) ===
+                # Check config blacklist
                 if symbol in self.config.symbol_blacklist:
                     rejected_counts['blacklisted'] += 1
-                    self.logger.debug(f"[BLACKLIST] Skipping {symbol} (in SYMBOL_BLACKLIST)")
+                    self.logger.debug(f"[BLACKLIST] Skipping {symbol} (in config SYMBOL_BLACKLIST)")
+                    continue
+
+                # Check runtime blacklist (BadSymbol errors)
+                if hasattr(self.exchange, 'symbol_blacklist') and self.exchange.symbol_blacklist.is_blacklisted(symbol):
+                    rejected_counts['blacklisted'] += 1
+                    self.logger.debug(f"[BLACKLIST] Skipping {symbol} (in runtime blacklist)")
                     continue
 
                 universe.append(symbol)

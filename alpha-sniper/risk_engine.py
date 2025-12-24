@@ -868,20 +868,22 @@ class RiskEngine:
 
     def _save_daily_trades(self):
         """
-        Persist today's closed trades to /var/run/alpha-sniper/trades_today.json
+        Persist today's closed trades to /var/lib/alpha-sniper/trades_today.json
         This file is used for daily reporting and gets cleared at UTC midnight.
         """
         import os
         import json
 
         try:
-            # Ensure directory exists
-            os.makedirs('/var/run/alpha-sniper', exist_ok=True)
+            # Use /var/lib (persistent) instead of /var/run (temporary, root-only)
+            # This directory is already created and owned by ubuntu user via systemd
+            dirpath = '/var/lib/alpha-sniper'
+            os.makedirs(dirpath, exist_ok=True)
 
-            filepath = '/var/run/alpha-sniper/trades_today.json'
+            filepath = os.path.join(dirpath, 'trades_today.json')
 
             # Save trades with atomic write
             helpers.save_json_atomic(filepath, self.closed_trades_today)
 
         except Exception as e:
-            self.logger.warning(f"Failed to save daily trades to /var/run/alpha-sniper/trades_today.json: {e}")
+            self.logger.warning(f"Failed to save daily trades to {filepath}: {e}")

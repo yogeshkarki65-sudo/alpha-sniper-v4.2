@@ -1130,7 +1130,7 @@ class AlphaSniperBot:
                 can_open, reason = self.risk_engine.can_open_new_position(signal)
 
                 if not can_open:
-                    self.logger.debug(f"❌ Cannot open {signal['symbol']} {signal['engine']}: {reason}")
+                    self.logger.info(f"[SIGNAL_REJECTED] {signal['symbol']} {signal['engine']} | reason={reason}")
                     continue
 
                 # Entry-DETE: Queue signal instead of opening immediately
@@ -1164,17 +1164,20 @@ class AlphaSniperBot:
                     adjusted_min_score = baseline_min_score * multiplier
                     signal_score = signal.get('score', 0)
                     if signal_score < adjusted_min_score:
-                        self.logger.debug(
-                            f"❌ Signal score too low for {signal['symbol']}: "
-                            f"{signal_score:.2f} < {adjusted_min_score:.2f} "
-                            f"(baseline={baseline_min_score:.2f}, multiplier={multiplier:.2f})"
+                        self.logger.info(
+                            f"[SIGNAL_REJECTED] {signal['symbol']} {signal['engine']} | "
+                            f"reason=score_too_low | score={signal_score:.2f} < min={adjusted_min_score:.2f}"
                         )
                         continue
 
                 # Minimum position size (adjusted for account size)
-                min_position_size = max(1.0, self.config.starting_equity * 0.01)  # 1% of equity or $1, whichever is higher
+                # For small accounts, allow smaller positions but respect exchange minimums
+                min_position_size = max(0.10, self.config.starting_equity * 0.005)  # 0.5% of equity or $0.10, whichever is higher
                 if size_usd < min_position_size:
-                    self.logger.debug(f"❌ Position size too small for {signal['symbol']}: ${size_usd:.2f} (min: ${min_position_size:.2f})")
+                    self.logger.info(
+                        f"[SIGNAL_REJECTED] {signal['symbol']} {signal['engine']} | "
+                        f"reason=position_too_small | size_usd=${size_usd:.2f} < min=${min_position_size:.2f}"
+                    )
                     continue
 
                 # Calculate risk % and quantities
@@ -1266,11 +1269,24 @@ class AlphaSniperBot:
                     # LIVE order
                     # Calculate amount in base currency
                     amount = size_usd / entry_price
+                    notional = amount * entry_price
+                    order_side = 'buy' if position['side'] == 'long' else 'sell'
+
+                    # CRITICAL LOG: Explicit order placement attempt
+                    self.logger.info(
+                        f"[PLACING_ORDER] {position['symbol']} | "
+                        f"side={order_side} | "
+                        f"engine={position['engine']} | "
+                        f"amount={amount:.8f} | "
+                        f"price={entry_price:.6f} | "
+                        f"notional=${notional:.2f} | "
+                        f"size_usd=${size_usd:.2f}"
+                    )
 
                     order = self.exchange.create_order(
                         symbol=position['symbol'],
                         type='market',
-                        side='buy' if position['side'] == 'long' else 'sell',
+                        side=order_side,
                         amount=amount,
                         params={'leverage': 1}  # 1x isolated
                     )

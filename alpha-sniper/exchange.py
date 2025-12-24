@@ -424,6 +424,7 @@ class RealExchange(BaseExchange):
     def __init__(self, config, logger):
         from core.quarantine_manager import QuarantineManager
         from core.order_executor import OrderExecutor
+        from core.symbol_blacklist import SymbolBlacklist
 
         self.config = config
         self.logger = logger
@@ -438,9 +439,15 @@ class RealExchange(BaseExchange):
             'enableRateLimit': True,
         })
 
-        # Initialize quarantine and order executor
+        # Initialize quarantine, blacklist, and order executor
         self.quarantine = QuarantineManager(config)
+        self.symbol_blacklist = SymbolBlacklist()
         self.order_executor = OrderExecutor(self, self.quarantine, logger)
+
+        # Log blacklist stats
+        blacklist_stats = self.symbol_blacklist.get_stats()
+        if blacklist_stats['total_blacklisted'] > 0:
+            self.logger.info(f"📋 Symbol blacklist loaded: {blacklist_stats['total_blacklisted']} symbols")
 
         self.logger.info("🌐 RealExchange initialized (LIVE mode with MEXC)")
 
@@ -484,6 +491,26 @@ class RealExchange(BaseExchange):
                     symbol_part = label.replace('fetch_funding_rate', '').replace('fetch_funding_rate_history', '').strip()
                     self.logger.debug(f"Skipping funding rate for {symbol_part}: contract does not exist on exchange (code 1001)")
                     return None  # Return immediately, no retries, no ERROR logs
+
+                # === BAD SYMBOL DETECTION AND BLACKLIST ===
+                # Detect BadSymbol errors to prevent retry spam
+                is_bad_symbol = (
+                    'BadSymbol' in error_str or
+                    'invalid symbol' in error_str.lower() or
+                    'symbol not found' in error_str.lower() or
+                    'does not have market symbol' in error_str.lower()
+                )
+
+                if is_bad_symbol and hasattr(self, 'symbol_blacklist'):
+                    # Extract symbol from label (e.g., "fetch_ticker PEN/USDT" -> "PEN/USDT")
+                    symbol_part = label.split()[-1] if ' ' in label else ''
+                    if symbol_part and '/' in symbol_part:
+                        self.symbol_blacklist.add(symbol_part, reason="BadSymbol")
+                        self.logger.warning(
+                            f"[BLACKLIST_ADD] {symbol_part} | reason=BadSymbol | "
+                            f"error={error_str[:100]} | will skip in future scans"
+                        )
+                    return None  # Return immediately, no retries
 
                 # === NORMAL ERROR HANDLING ===
                 # Log error for non-funding-rate calls or different errors
@@ -734,6 +761,26 @@ class DataOnlyMexcExchange(BaseExchange):
                     symbol_part = label.replace('fetch_funding_rate', '').replace('fetch_funding_rate_history', '').strip()
                     self.logger.debug(f"Skipping funding rate for {symbol_part}: contract does not exist on exchange (code 1001)")
                     return None  # Return immediately, no retries, no ERROR logs
+
+                # === BAD SYMBOL DETECTION AND BLACKLIST ===
+                # Detect BadSymbol errors to prevent retry spam
+                is_bad_symbol = (
+                    'BadSymbol' in error_str or
+                    'invalid symbol' in error_str.lower() or
+                    'symbol not found' in error_str.lower() or
+                    'does not have market symbol' in error_str.lower()
+                )
+
+                if is_bad_symbol and hasattr(self, 'symbol_blacklist'):
+                    # Extract symbol from label (e.g., "fetch_ticker PEN/USDT" -> "PEN/USDT")
+                    symbol_part = label.split()[-1] if ' ' in label else ''
+                    if symbol_part and '/' in symbol_part:
+                        self.symbol_blacklist.add(symbol_part, reason="BadSymbol")
+                        self.logger.warning(
+                            f"[BLACKLIST_ADD] {symbol_part} | reason=BadSymbol | "
+                            f"error={error_str[:100]} | will skip in future scans"
+                        )
+                    return None  # Return immediately, no retries
 
                 # === NORMAL ERROR HANDLING ===
                 # Log error for non-funding-rate calls or different errors
