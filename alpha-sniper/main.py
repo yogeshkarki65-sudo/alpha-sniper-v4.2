@@ -447,10 +447,12 @@ class AlphaSniperBot:
 
                 # === SCRATCH EXIT LOGIC (early thesis-failure detection) ===
                 if self.scratch_exit_manager and self.ddl:
+                    elapsed_seconds = time.time() - timestamp_open
                     should_scratch, scratch_reason = self.scratch_exit_manager.should_scratch(
                         position=position,
                         current_price=current_price,
-                        ddl_mode=self.ddl.current_mode.value
+                        current_mode=self.ddl.current_mode.value,
+                        elapsed_seconds=elapsed_seconds
                     )
                     if should_scratch:
                         self.logger.info(
@@ -704,10 +706,12 @@ class AlphaSniperBot:
 
                 # === SCRATCH EXIT LOGIC (FAST CHECK) ===
                 if self.scratch_exit_manager and self.ddl:
+                    elapsed_seconds = time.time() - timestamp_open
                     should_scratch, scratch_reason = self.scratch_exit_manager.should_scratch(
                         position=position,
                         current_price=current_price,
-                        ddl_mode=self.ddl.current_mode.value
+                        current_mode=self.ddl.current_mode.value,
+                        elapsed_seconds=elapsed_seconds
                     )
                     if should_scratch:
                         self.logger.info(
