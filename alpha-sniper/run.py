@@ -12,18 +12,18 @@ Safety:
     - Will refuse to start if configuration is inconsistent
     - Validates API keys presence/absence based on mode
 """
-import sys
-import os
 import argparse
+import os
+import sys
 from pathlib import Path
 
 # Add project root to path
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-from config import Config
-from utils import setup_logger_production
-from main import AlphaSniperBot
+from config import Config  # noqa: E402
+from main import AlphaSniperBot  # noqa: E402
+from utils import setup_logger_production  # noqa: E402
 
 
 def validate_mode_safety(mode: str, config: Config) -> tuple[bool, str]:

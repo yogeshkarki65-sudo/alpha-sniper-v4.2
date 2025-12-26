@@ -12,11 +12,12 @@ Requirements:
     pip install ccxt pandas
 """
 import argparse
+import time
+from datetime import datetime, timedelta
+from pathlib import Path
+
 import ccxt
 import pandas as pd
-from pathlib import Path
-from datetime import datetime, timedelta
-import time
 
 
 def download_symbol(
@@ -74,7 +75,7 @@ def download_symbol(
             break
 
     if not all_candles:
-        print(f"    ⚠️ No data downloaded")
+        print("    ⚠️ No data downloaded")
         return False
 
     # Convert to DataFrame
@@ -136,13 +137,13 @@ def main():
     start_time = end_time - timedelta(days=args.days)
     since = int(start_time.timestamp() * 1000)
 
-    print(f"\n📥 MEXC Data Downloader")
-    print(f"=" * 70)
+    print("\n📥 MEXC Data Downloader")
+    print("=" * 70)
     print(f"Symbols: {', '.join(symbols)}")
     print(f"Timeframes: {', '.join(timeframes)}")
     print(f"Period: {start_time.strftime('%Y-%m-%d')} to {end_time.strftime('%Y-%m-%d')} ({args.days} days)")
     print(f"Output: {output_dir}/")
-    print(f"=" * 70)
+    print("=" * 70)
     print()
 
     # Initialize MEXC exchange
@@ -154,7 +155,7 @@ def main():
             }
         })
         exchange.load_markets()
-        print(f"✅ Connected to MEXC")
+        print("✅ Connected to MEXC")
         print()
     except Exception as e:
         print(f"❌ Failed to connect to MEXC: {e}")
@@ -178,13 +179,13 @@ def main():
 
         print()
 
-    print(f"=" * 70)
+    print("=" * 70)
     print(f"✅ Downloaded {success_count}/{total_count} datasets")
     print(f"📁 Data saved to: {output_dir}/")
     print()
 
     if success_count < total_count:
-        print(f"⚠️ Some downloads failed. Check symbols and try again.")
+        print("⚠️ Some downloads failed. Check symbols and try again.")
         return 1
 
     return 0

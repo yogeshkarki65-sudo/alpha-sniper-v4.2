@@ -15,15 +15,12 @@ Usage:
 import os
 import sys
 import time
-import logging
-from datetime import datetime, timezone
 
 # Add current directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config import get_config
-from utils.logger import setup_logger
 from utils.entry_dete import EntryDETEngine
+from utils.logger import setup_logger
 
 
 class MockExchange:
@@ -137,8 +134,6 @@ def test_basic_queuing():
     assert entry_dete.get_pending_count() == 1, "Signal should be queued"
     print("✅ TEST 1 PASSED: Signal queued successfully")
 
-    return entry_dete, exchange, risk_engine, config
-
 
 def test_dip_trigger(entry_dete, exchange, risk_engine, config):
     """Test 2: Dip trigger confirmation"""
@@ -251,9 +246,9 @@ def test_multi_trigger_confirmation(entry_dete, exchange, risk_engine, config):
 
     # Check if position was opened
     if len(risk_engine.opened_positions) > 0:
-        print(f"✅ TEST 4 PASSED: Position confirmed with multi-triggers")
+        print("✅ TEST 4 PASSED: Position confirmed with multi-triggers")
     else:
-        print(f"⚠️  TEST 4: No position opened (triggers may not have fired)")
+        print("⚠️  TEST 4: No position opened (triggers may not have fired)")
 
 
 def test_integration_flow():
@@ -314,8 +309,8 @@ def test_integration_flow():
         print(f"   Pending signals remaining: {entry_dete.get_pending_count()}")
         print(f"   Positions opened so far: {len(risk_engine.opened_positions)}")
 
-    print(f"\n✅ TEST 5 PASSED: Integration flow completed")
-    print(f"   Final stats:")
+    print("\n✅ TEST 5 PASSED: Integration flow completed")
+    print("   Final stats:")
     print(f"   - Signals queued: {len(signals)}")
     print(f"   - Positions opened: {len(risk_engine.opened_positions)}")
     print(f"   - Signals still pending: {entry_dete.get_pending_count()}")

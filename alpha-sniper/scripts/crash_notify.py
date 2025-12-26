@@ -4,14 +4,15 @@ Crash Notification Script
 
 Sends alert when alpha-sniper-live.service fails.
 """
-import sys
 import os
 import socket
+import sys
 
 # Add scripts directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from telegram_notify import send_telegram
+
 
 def main():
     hostname = socket.gethostname()

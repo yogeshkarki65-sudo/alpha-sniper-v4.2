@@ -40,7 +40,7 @@ class LongEngine:
         Evaluate a single symbol for long entry
         """
         # Get data
-        ticker = data.get('ticker')
+        data.get('ticker')
         df_15m = data.get('df_15m')
         df_1h = data.get('df_1h')
 
@@ -81,7 +81,6 @@ class LongEngine:
         price_above_1h_emas = current_price > ema_20_1h and current_price > ema_50_1h
         ema_alignment = ema_20_15m > ema_50_15m  # Short EMA > Long EMA (uptrend)
         rvol_check = rvol >= rvol_threshold
-        momentum_check = momentum_1h > 5  # Positive momentum
 
         # Calculate score (0-100)
         score = 0

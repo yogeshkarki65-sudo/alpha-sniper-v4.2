@@ -9,10 +9,11 @@ Usage:
     python generate_sample_data.py --output-dir sample_data
 """
 import argparse
-import pandas as pd
-import numpy as np
-from pathlib import Path
 from datetime import datetime, timedelta
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
 
 
 def generate_pump_scenario(
@@ -147,13 +148,13 @@ def main():
 
     symbols = [s.strip() for s in args.symbols.split(',')]
 
-    print(f"\n📊 Sample Data Generator")
-    print(f"=" * 70)
+    print("\n📊 Sample Data Generator")
+    print("=" * 70)
     print(f"Symbols: {', '.join(symbols)}")
     print(f"Duration: {args.days} days")
     print(f"Pumps: {args.pumps}")
     print(f"Output: {output_dir}/")
-    print(f"=" * 70)
+    print("=" * 70)
     print()
 
     for symbol in symbols:
@@ -231,11 +232,11 @@ def main():
 
         print()
 
-    print(f"=" * 70)
+    print("=" * 70)
     print(f"✅ Sample data generated in: {output_dir}/")
     print()
-    print(f"Test with:")
-    print(f"  python backtest_pump.py \\")
+    print("Test with:")
+    print("  python backtest_pump.py \\")
     print(f"    --symbols {','.join(symbols)} \\")
     print(f"    --start {(end_time - timedelta(days=args.days)).strftime('%Y-%m-%d')} \\")
     print(f"    --end {end_time.strftime('%Y-%m-%d')} \\")

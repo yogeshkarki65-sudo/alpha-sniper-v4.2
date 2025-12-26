@@ -5,16 +5,18 @@ Test MEXC Balance Fetching
 This script tests if the bot can fetch your real USDT balance from MEXC.
 """
 import sys
-import os
 from pathlib import Path
+
+import pytest
 
 # Add project to path
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-from config import get_config
-from utils import setup_logger
-from exchange import create_exchange
+from config import get_config  # noqa: E402
+from exchange import create_exchange  # noqa: E402
+from utils import setup_logger  # noqa: E402
+
 
 def test_balance_fetch():
     """Test fetching MEXC balance"""
@@ -29,7 +31,7 @@ def test_balance_fetch():
         logger = setup_logger()
     except Exception as e:
         print(f"❌ Error loading config: {e}")
-        return False
+        pytest.skip(f"Config loading failed: {e}")
 
     # Check if API keys are configured
     if not config.mexc_api_key or config.mexc_api_key == "your_real_key_here":
@@ -41,9 +43,9 @@ def test_balance_fetch():
         print()
         print("Get your API keys from: https://www.mexc.com/user/openapi")
         print()
-        return False
+        pytest.skip("MEXC API keys not configured")
 
-    print(f"✓ API keys configured")
+    print("✓ API keys configured")
     print(f"  Key: {config.mexc_api_key[:8]}...{config.mexc_api_key[-4:]}")
     print()
 
@@ -55,7 +57,7 @@ def test_balance_fetch():
         print()
     except Exception as e:
         print(f"❌ Error creating exchange: {e}")
-        return False
+        pytest.skip(f"Exchange creation failed: {e}")
 
     # Test balance fetch
     try:
@@ -70,7 +72,7 @@ def test_balance_fetch():
             print("- API key doesn't have spot trading permissions")
             print("- Network connectivity issues")
             print("- MEXC API temporarily unavailable")
-            return False
+            pytest.fail("Failed to fetch balance (returned None)")
 
         print()
         print("=" * 70)
@@ -93,18 +95,26 @@ def test_balance_fetch():
                 print(f"  Used:  ${used:.2f}")
                 print(f"  Total: ${free + used:.2f}")
                 print()
-        except:
+        except Exception:
             pass
 
-        return True
+        # Test passes - balance fetched successfully
+        assert balance >= 0, "Balance should be non-negative"
 
     except Exception as e:
         print(f"❌ Error fetching balance: {e}")
         print()
         import traceback
         traceback.print_exc()
-        return False
+        pytest.fail(f"Error fetching balance: {e}")
 
 if __name__ == "__main__":
-    success = test_balance_fetch()
-    sys.exit(0 if success else 1)
+    try:
+        test_balance_fetch()
+        print("\n✅ Test completed successfully")
+        sys.exit(0)
+    except SystemExit:
+        raise
+    except Exception as e:
+        print(f"\n❌ Test failed: {e}")
+        sys.exit(1)

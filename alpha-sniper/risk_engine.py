@@ -7,7 +7,8 @@ Risk Engine for Alpha Sniper V4.2
 """
 import time
 from datetime import datetime, timezone
-from typing import Optional, Dict, List
+from typing import Dict, Optional
+
 from utils import helpers
 
 
@@ -175,8 +176,8 @@ class RiskEngine:
             return (self.config.pump_allocation_min, self.config.pump_allocation_max)
 
         try:
-            import os
             import csv
+            import os
 
             trade_log_path = 'logs/v4_trade_scores.csv'
 
@@ -317,7 +318,7 @@ class RiskEngine:
                     f"RSI: {rsi:.1f}\n"
                     f"30d Return: {return_30d:+.1f}%"
                 )
-                self.logger.info(f"[TELEGRAM] Sending regime change notification")
+                self.logger.info("[TELEGRAM] Sending regime change notification")
                 self.telegram.send(alert_msg)
                 self.current_regime = regime
             else:
@@ -428,7 +429,7 @@ class RiskEngine:
                 if not self.daily_loss_limit_hit:
                     try:
                         self.logger.info(f"[RISK] Daily loss limit HIT: {float(session_pnl_pct)*100:.2f}%")
-                    except:
+                    except Exception:
                         pass
                     self.daily_loss_limit_hit = True
                 return False, "Daily loss limit -2%"
@@ -443,7 +444,7 @@ class RiskEngine:
                     remaining_hours = (cooldown_end - now) / 3600
                     try:
                         self.logger.info(f"[RISK] Cooldown active for {symbol} {side}: {float(remaining_hours):.1f}h remaining")
-                    except:
+                    except Exception:
                         pass
                     return False, f"Cooldown {remaining_hours:.1f}h"
                 else:
@@ -456,7 +457,7 @@ class RiskEngine:
             if daily_loss_pct <= -self.config.max_daily_loss_pct:
                 # Send enhanced alert first time it's hit
                 if not self.daily_loss_alert_sent:
-                    self.logger.info(f"[TELEGRAM] Sending daily loss limit notification")
+                    self.logger.info("[TELEGRAM] Sending daily loss limit notification")
                     if self.alert_mgr:
                         self.alert_mgr.send_daily_loss_limit_hit(
                             loss_pct=daily_loss_pct * 100,
@@ -513,7 +514,14 @@ class RiskEngine:
         engine_risk = self.get_risk_per_trade(engine)
 
         if (current_heat + engine_risk) > self.config.max_portfolio_heat:
-            return False, f"Portfolio heat limit ({current_heat*100:.3f}% + {engine_risk*100:.3f}% > {self.config.max_portfolio_heat*100:.2f}%)"
+            current_pct = current_heat * 100
+            engine_pct = engine_risk * 100
+            max_pct = self.config.max_portfolio_heat * 100
+            msg = (
+                f"Portfolio heat limit "
+                f"({current_pct:.3f}% + {engine_pct:.3f}% > {max_pct:.2f}%)"
+            )
+            return False, msg
 
         return True, None
 
@@ -580,7 +588,7 @@ class RiskEngine:
                 self.cooldown_tracker[cooldown_key] = cooldown_end
                 try:
                     self.logger.info(f"[RISK] Cooldown activated for {symbol} {side}: 4h block after loss")
-                except:
+                except Exception:
                     pass
 
         # Hold time
@@ -719,7 +727,7 @@ class RiskEngine:
                         f"New entries are now allowed.\n"
                         f"Current equity: ${self.current_equity:.2f}"
                     )
-                    self.logger.info(f"[TELEGRAM] Sent daily reset notification")
+                    self.logger.info("[TELEGRAM] Sent daily reset notification")
                 except Exception as e:
                     self.logger.warning(f"[TELEGRAM] Failed to send daily reset notification: {e}")
 
@@ -754,7 +762,7 @@ class RiskEngine:
                         f"⚠️ Permission error writing positions file:\n{filepath}\n\n"
                         f"Bot continues but positions may not persist."
                     )
-                except:
+                except Exception:
                     pass
         except Exception as e:
             self.logger.warning(f"Failed to save positions to {filepath}: {e}")
@@ -775,7 +783,7 @@ class RiskEngine:
         if not self.open_positions and os.path.exists(filepath):
             try:
                 # Try to read file to check permissions
-                with open(filepath, 'r') as f:
+                with open(filepath, 'r'):
                     pass
             except PermissionError:
                 self.logger.error(f"❌ Permission error reading positions file at {filepath}")
@@ -787,7 +795,7 @@ class RiskEngine:
                             f"⚠️ Permission error reading positions file:\n{filepath}\n\n"
                             f"Bot will start without previous positions."
                         )
-                    except:
+                    except Exception:
                         pass
 
         if self.open_positions:
@@ -799,7 +807,6 @@ class RiskEngine:
         This file is used for daily reporting and gets cleared at UTC midnight.
         """
         import os
-        import json
 
         try:
             # Ensure directory exists

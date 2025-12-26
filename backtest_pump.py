@@ -30,13 +30,13 @@ Data Requirements:
 """
 import argparse
 import sys
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 # Add alpha-sniper to path
 sys.path.insert(0, str(Path(__file__).parent / 'alpha-sniper'))
 
-from backtest.engine import PumpBacktester, BacktestConfig
+from backtest.engine import BacktestConfig, PumpBacktester
 
 
 def parse_args():
@@ -182,12 +182,12 @@ def main():
     # Parse symbols
     symbols = [s.strip() + '/USDT' if '/' not in s else s.strip() for s in args.symbols.split(',')]
 
-    print(f"\n🚀 Alpha Sniper V4.2 - Pump Backtest")
-    print(f"=" * 70)
+    print("\n🚀 Alpha Sniper V4.2 - Pump Backtest")
+    print("=" * 70)
     print(f"Symbols: {', '.join(symbols)}")
     print(f"Period: {args.start} to {args.end}")
     print(f"Starting Equity: ${args.equity:.2f}")
-    print(f"=" * 70)
+    print("=" * 70)
     print()
 
     # Create config
@@ -221,7 +221,7 @@ def main():
     if loaded == 0:
         print("❌ No data loaded. Please check:")
         print(f"   - CSV files exist in {args.data_dir}/")
-        print(f"   - Filenames match pattern: SYMBOLNAME_timeframe.csv")
+        print("   - Filenames match pattern: SYMBOLNAME_timeframe.csv")
         print(f"   - Example: {args.data_dir}/BTCUSDT_1m.csv")
         sys.exit(1)
 
@@ -264,22 +264,22 @@ def main():
         f.write(f"Period: {args.start} to {args.end}\n")
         f.write(f"Symbols: {', '.join(symbols)}\n")
         f.write(f"Starting Equity: ${stats['starting_equity']:.2f}\n")
-        f.write(f"\n")
+        f.write("\n")
         f.write(f"Total Trades: {stats['total_trades']}\n")
         f.write(f"Wins / Losses: {stats['wins']}W / {stats['losses']}L\n")
         f.write(f"Win Rate: {stats['win_rate']:.1f}%\n")
         f.write(f"Average R: {stats['avg_r']:.2f}R\n")
         f.write(f"Avg Win: ${stats['avg_win_usd']:.2f}\n")
         f.write(f"Avg Loss: ${stats['avg_loss_usd']:.2f}\n")
-        f.write(f"\n")
+        f.write("\n")
         f.write(f"Final Equity: ${stats['final_equity']:.2f}\n")
         f.write(f"Total P&L: ${stats['total_pnl_usd']:+.2f} ({stats['total_pnl_pct']:+.2f}%)\n")
         f.write(f"Total Fees: ${stats['total_fees']:.2f}\n")
         f.write(f"Max Drawdown: {stats['max_drawdown_pct']:.2f}%\n")
-        f.write(f"\n")
+        f.write("\n")
         f.write(f"Best Trade: {stats['best_trade_symbol']} ${stats['best_trade_usd']:.2f}\n")
         f.write(f"Worst Trade: {stats['worst_trade_symbol']} ${stats['worst_trade_usd']:.2f}\n")
-        f.write(f"\n")
+        f.write("\n")
         f.write("Strategy Parameters:\n")
         f.write(f"  PUMP_RISK_PER_TRADE: {args.pump_risk}\n")
         f.write(f"  PUMP_MIN_RVOL: {args.pump_min_rvol}\n")

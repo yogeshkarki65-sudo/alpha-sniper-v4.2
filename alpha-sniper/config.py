@@ -1,7 +1,7 @@
 import os
 import re
 from dataclasses import dataclass
-from typing import Optional
+
 from dotenv import load_dotenv
 
 
@@ -279,7 +279,7 @@ class Config:
             if regime_value is not None and regime_value != '':
                 try:
                     return type(default_value)(regime_value)
-                except:
+                except Exception:
                     pass
 
             # Try base env var
@@ -288,7 +288,7 @@ class Config:
             if base_value is not None and base_value != '':
                 try:
                     return type(default_value)(base_value)
-                except:
+                except Exception:
                     pass
 
             # Use default

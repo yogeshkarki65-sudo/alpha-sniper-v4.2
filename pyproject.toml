@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "alpha-sniper"
+version = "4.2.0"
+description = "Alpha Sniper V4.2 - Full-Dynamic-Safe-Bull Trading Bot"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+    {name = "Alpha Sniper Team"}
+]
+dependencies = [
+    "ccxt>=4.0.0",
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "python-dotenv>=1.0.0",
+    "requests>=2.31.0",
+    "schedule>=1.2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-mock>=3.11.0",
+    "ruff>=0.1.0",
+]
+
+[tool.setuptools]
+packages = ["alpha_sniper"]
+package-dir = {"" = "alpha-sniper"}
+
+[tool.setuptools.package-data]
+alpha_sniper = ["*.py"]
+
+[tool.ruff]
+line-length = 140
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = []
+
+[tool.pytest.ini_options]
+testpaths = ["alpha-sniper"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short"

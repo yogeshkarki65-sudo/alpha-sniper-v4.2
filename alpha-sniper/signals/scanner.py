@@ -5,10 +5,11 @@ Scanner for Alpha Sniper V4.2
 - Returns prioritized signals
 """
 from utils import helpers
-from signals.long_engine import LongEngine
-from signals.short_engine import ShortEngine
-from signals.pump_engine import PumpEngine
+
 from signals.bear_micro_long import BearMicroLongEngine
+from signals.long_engine import LongEngine
+from signals.pump_engine import PumpEngine
+from signals.short_engine import ShortEngine
 
 
 class Scanner:
@@ -212,7 +213,7 @@ class Scanner:
 
             # Limit universe size for SIM mode to avoid rate limits
             if self.config.sim_mode and len(universe) > 50:
-                self.logger.debug(f"SIM mode: limiting universe to top 50 by volume")
+                self.logger.debug("SIM mode: limiting universe to top 50 by volume")
                 # In real implementation, you'd sort by volume here
                 # For now, just take first 50
                 universe = universe[:50]

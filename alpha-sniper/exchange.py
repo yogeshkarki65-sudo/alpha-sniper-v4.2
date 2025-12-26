@@ -7,12 +7,11 @@ IMPROVEMENTS:
 - Clean BaseExchange interface
 - Robust error handling with exponential backoff
 """
-import ccxt
-import time
-import logging
 import random
-import numpy as np
-from datetime import datetime, timedelta
+import time
+from datetime import datetime
+
+import ccxt
 
 
 class BaseExchange:
@@ -225,11 +224,11 @@ class SimulatedExchange(BaseExchange):
 
             o = price
             h = price * random.uniform(1.001, 1.008)  # Smaller intrabar moves
-            l = price * random.uniform(0.992, 0.999)
+            low = price * random.uniform(0.992, 0.999)
             c = price * random.uniform(0.998, 1.002)  # Close near open
             v = random.uniform(2000, 8000)
 
-            ohlcv.append([ts, o, h, l, c, v])
+            ohlcv.append([ts, o, h, low, c, v])
 
         # Ensure the last candle close matches current price
         if ohlcv:
@@ -283,7 +282,7 @@ class SimulatedExchange(BaseExchange):
 
             o = price
             h = price * random.uniform(1.002, 1.015)
-            l = price * random.uniform(0.985, 0.998)
+            low = price * random.uniform(0.985, 0.998)
             c = price * random.uniform(0.995, 1.005)
 
             # Volume increases with recency
@@ -296,7 +295,7 @@ class SimulatedExchange(BaseExchange):
             else:
                 v = base_vol
 
-            ohlcv.append([ts, o, h, l, c, v])
+            ohlcv.append([ts, o, h, low, c, v])
 
         # Ensure the last candle close matches current price
         if ohlcv:
@@ -638,9 +637,17 @@ class RealExchange(BaseExchange):
 
             # Log breakdown
             if asset_values:
-                self.logger.info(f"Portfolio breakdown: USDT=${usdt_free + usdt_used:.2f} | {' | '.join(asset_values)} | Total=${total_value_usdt:.2f}")
+                breakdown_msg = (
+                    f"Portfolio breakdown: USDT=${usdt_free + usdt_used:.2f} | "
+                    f"{' | '.join(asset_values)} | Total=${total_value_usdt:.2f}"
+                )
+                self.logger.info(breakdown_msg)
             else:
-                self.logger.debug(f"MEXC Portfolio: USDT=${usdt_free + usdt_used:.2f} (100%) | Total=${total_value_usdt:.2f}")
+                portfolio_msg = (
+                    f"MEXC Portfolio: USDT=${usdt_free + usdt_used:.2f} (100%) | "
+                    f"Total=${total_value_usdt:.2f}"
+                )
+                self.logger.debug(portfolio_msg)
 
             return total_value_usdt
 
@@ -892,11 +899,11 @@ def create_exchange(config, logger):
     """
     if config.sim_mode:
         if config.sim_data_source == "LIVE_DATA":
-            logger.info(f"📡 SIM_MODE=True | SIM_DATA_SOURCE=LIVE_DATA | Using DataOnlyMexcExchange (REAL MEXC market data, PAPER ONLY)")
+            logger.info("📡 SIM_MODE=True | SIM_DATA_SOURCE=LIVE_DATA | Using DataOnlyMexcExchange (REAL MEXC market data, PAPER ONLY)")
             return DataOnlyMexcExchange(config, logger)
         else:
-            logger.info(f"📡 SIM_MODE=True | SIM_DATA_SOURCE=FAKE | Using SimulatedExchange (synthetic data)")
+            logger.info("📡 SIM_MODE=True | SIM_DATA_SOURCE=FAKE | Using SimulatedExchange (synthetic data)")
             return SimulatedExchange(config, logger)
     else:
-        logger.info(f"📡 SIM_MODE=False | Using RealExchange (LIVE trading)")
+        logger.info("📡 SIM_MODE=False | Using RealExchange (LIVE trading)")
         return RealExchange(config, logger)

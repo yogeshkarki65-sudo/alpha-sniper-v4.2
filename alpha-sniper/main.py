@@ -10,25 +10,23 @@ Features:
 - Telegram alerts
 - Fast Stop Manager (dual async loops)
 """
-import time
-import schedule
-import signal
-import sys
 import argparse
 import asyncio
+import signal
+import time
 from datetime import datetime, timezone
 
+import schedule
 from config import get_config
-from utils import setup_logger
+from exchange import create_exchange
+from risk_engine import RiskEngine
+from signals.scanner import Scanner
+from utils import helpers, setup_logger
 from utils.dynamic_filters import update_dynamic_filters
 from utils.entry_dete import EntryDETEngine
 from utils.pump_trailer import PumpTrailer
 from utils.telegram import TelegramNotifier
 from utils.telegram_alerts import TelegramAlertManager
-from utils import helpers
-from exchange import create_exchange
-from risk_engine import RiskEngine
-from signals.scanner import Scanner
 
 
 class AlphaSniperBot:
@@ -103,7 +101,7 @@ class AlphaSniperBot:
         mode_str = 'SIM' if self.config.sim_mode else 'LIVE'
         data_source = sim_data_source if self.config.sim_mode else 'LIVE'
 
-        self.logger.info(f"[TELEGRAM] Sending enhanced startup notification")
+        self.logger.info("[TELEGRAM] Sending enhanced startup notification")
         self.alert_mgr.send_startup(
             mode=mode_str,
             pump_only=self.config.pump_only_mode,
@@ -132,12 +130,18 @@ class AlphaSniperBot:
                         self.risk_engine.update_equity(live_equity)
 
                         # Send enhanced Telegram notification on first equity sync
-                        if not self.first_equity_sync_notified and abs(old_equity - self.config.starting_equity) < 0.01 and abs(live_equity - old_equity) > 0.01:
+                        old_diff = abs(old_equity - self.config.starting_equity)
+                        equity_diff = abs(live_equity - old_equity)
+                        if (
+                            not self.first_equity_sync_notified
+                            and old_diff < 0.01
+                            and equity_diff > 0.01
+                        ):
                             self.alert_mgr.send_equity_sync(
                                 config_equity=self.config.starting_equity,
                                 mexc_balance=live_equity
                             )
-                            self.logger.info(f"[TELEGRAM] Sent enhanced equity sync notification")
+                            self.logger.info("[TELEGRAM] Sent enhanced equity sync notification")
                             self.first_equity_sync_notified = True
                     else:
                         self.logger.warning("⚠️ Failed to fetch MEXC balance, using cached equity")
@@ -151,7 +155,13 @@ class AlphaSniperBot:
 
             self.logger.info("")
             self.logger.info("=" * 70)
-            self.logger.info(f"🔄 New cycle | t={cycle_time} | regime={regime} | sim={self.config.sim_mode} | equity=${self.risk_engine.current_equity:.2f} | open_positions={open_pos}")
+            cycle_header = (
+                f"🔄 New cycle | t={cycle_time} | regime={regime} | "
+                f"sim={self.config.sim_mode} | "
+                f"equity=${self.risk_engine.current_equity:.2f} | "
+                f"open_positions={open_pos}"
+            )
+            self.logger.info(cycle_header)
             self.logger.info("=" * 70)
 
             # 1. Check daily reset
@@ -169,7 +179,7 @@ class AlphaSniperBot:
                     ticker = self.exchange.get_ticker('BTC/USDT')
                     if ticker:
                         btc_price = ticker.get('last', ticker.get('close', 0))
-                except:
+                except Exception:
                     pass
                 self.alert_mgr.send_regime_change(old_regime, new_regime, btc_price)
                 self.logger.info(f"[TELEGRAM] Sent regime change notification: {old_regime} → {new_regime}")
@@ -207,7 +217,7 @@ class AlphaSniperBot:
                     mode = "SIM" if self.config.sim_mode else "LIVE"
                     error_type = type(e).__name__
                     error_msg = str(e)[:200]  # Limit to 200 chars
-                    self.logger.info(f"[TELEGRAM] Sending critical error notification")
+                    self.logger.info("[TELEGRAM] Sending critical error notification")
                     self.telegram.send(
                         f"🚨 [{mode}] CRITICAL ERROR\n"
                         f"Type: {error_type}\n"
@@ -216,7 +226,7 @@ class AlphaSniperBot:
                         f"(Rate limited: max 1 alert per 15 min)"
                     )
                     self.last_error_notification = current_time
-            except:
+            except Exception:
                 pass  # Don't crash on Telegram failure
 
     def _manage_positions(self):
@@ -273,7 +283,7 @@ class AlphaSniperBot:
                     position['stop_loss'] = entry_price
                     try:
                         self.logger.info(f"[EXIT] Breakeven activated for {symbol}: {float(unrealized_r):.2f}R")
-                    except:
+                    except Exception:
                         self.logger.info(f"[EXIT] Breakeven activated for {symbol}")
 
                 # Exit improvement: Partial TP (50%) at +2R
@@ -400,7 +410,7 @@ class AlphaSniperBot:
                     position['stop_loss'] = entry_price
                     try:
                         self.logger.info(f"[EXIT] Breakeven activated for {symbol}: {float(unrealized_r):.2f}R")
-                    except:
+                    except Exception:
                         self.logger.info(f"[EXIT] Breakeven activated for {symbol}")
 
                 # Exit improvement: Partial TP (50%) at +2R
@@ -551,58 +561,58 @@ class AlphaSniperBot:
         signals_opened = 0
         signals_queued = 0
 
-        for signal in signals:
+        for sig in signals:
             try:
                 # Check if we can open new position
-                can_open, reason = self.risk_engine.can_open_new_position(signal)
+                can_open, reason = self.risk_engine.can_open_new_position(sig)
 
                 if not can_open:
-                    self.logger.debug(f"❌ Cannot open {signal['symbol']} {signal['engine']}: {reason}")
+                    self.logger.debug(f"❌ Cannot open {sig['symbol']} {sig['engine']}: {reason}")
                     continue
 
-                # Entry-DETE: Queue signal instead of opening immediately
+                # Entry-DETE: Queue sig instead of opening immediately
                 if self.config.entry_dete_enabled:
-                    self.entry_dete_engine.queue_signal(signal)
+                    self.entry_dete_engine.queue_signal(sig)
                     signals_queued += 1
                     continue  # Skip immediate entry logic below
 
-                # Get current price (use entry_price from signal)
-                entry_price = signal['entry_price']
-                stop_loss = signal['stop_loss']
+                # Get current price (use entry_price from sig)
+                entry_price = sig['entry_price']
+                stop_loss = sig['stop_loss']
 
                 # Calculate position size
-                size_usd = self.risk_engine.calculate_position_size(signal, entry_price, stop_loss)
+                size_usd = self.risk_engine.calculate_position_size(sig, entry_price, stop_loss)
 
                 # Minimum position size (adjusted for account size)
                 min_position_size = max(1.0, self.config.starting_equity * 0.01)  # 1% of equity or $1, whichever is higher
                 if size_usd < min_position_size:
-                    self.logger.debug(f"❌ Position size too small for {signal['symbol']}: ${size_usd:.2f} (min: ${min_position_size:.2f})")
+                    self.logger.debug(f"❌ Position size too small for {sig['symbol']}: ${size_usd:.2f} (min: ${min_position_size:.2f})")
                     continue
 
                 # Calculate risk % and quantities
-                risk_pct = self.risk_engine.get_risk_per_trade(signal.get('engine', 'standard'))
+                risk_pct = self.risk_engine.get_risk_per_trade(sig.get('engine', 'standard'))
                 equity_at_entry = self.risk_engine.current_equity
                 initial_risk_usd = equity_at_entry * risk_pct
                 qty = size_usd / entry_price if entry_price > 0 else 0
 
                 # Create position object
                 position = {
-                    'symbol': signal['symbol'],
-                    'side': signal['side'],
-                    'engine': signal['engine'],
+                    'symbol': sig['symbol'],
+                    'side': sig['side'],
+                    'engine': sig['engine'],
                     'entry_price': entry_price,
                     'stop_loss': stop_loss,
-                    'tp_2r': signal.get('tp_2r', 0),
-                    'tp_4r': signal.get('tp_4r', 0),
+                    'tp_2r': sig.get('tp_2r', 0),
+                    'tp_4r': sig.get('tp_4r', 0),
                     'size_usd': size_usd,
                     'qty': qty,
                     'risk_pct': risk_pct,
                     'initial_risk_usd': initial_risk_usd,
                     'equity_at_entry': equity_at_entry,
-                    'score': signal.get('score', 0),
-                    'regime': signal.get('regime', ''),
+                    'score': sig.get('score', 0),
+                    'regime': sig.get('regime', ''),
                     'timestamp_open': time.time(),
-                    'max_hold_hours': signal.get('max_hold_hours', 48)
+                    'max_hold_hours': sig.get('max_hold_hours', 48)
                 }
 
                 # Place order (SIM or LIVE)
@@ -628,7 +638,7 @@ class AlphaSniperBot:
 
                     # Send enhanced Telegram notification for SIM open
                     try:
-                        target = signal.get('tp_4r', signal.get('tp_2r', 0))
+                        target = sig.get('tp_4r', sig.get('tp_2r', 0))
                         r_multiple = None
                         if stop_loss > 0 and entry_price > 0:
                             risk_per_unit = abs(entry_price - stop_loss)
@@ -680,7 +690,7 @@ class AlphaSniperBot:
 
                         # Send enhanced Telegram notification for LIVE open
                         try:
-                            target = signal.get('tp_4r', signal.get('tp_2r', 0))
+                            target = sig.get('tp_4r', sig.get('tp_2r', 0))
                             r_multiple = None
                             if stop_loss > 0 and entry_price > 0:
                                 risk_per_unit = abs(entry_price - stop_loss)
@@ -708,7 +718,7 @@ class AlphaSniperBot:
                         self.logger.error(f"🔴 Failed to create order for {position['symbol']}")
 
             except Exception as e:
-                self.logger.error(f"Error processing signal {signal.get('symbol', 'UNKNOWN')}: {e}")
+                self.logger.error(f"Error processing sig {sig.get('symbol', 'UNKNOWN')}: {e}")
                 continue
 
         # Log results
@@ -945,14 +955,14 @@ class AlphaSniperBot:
                 mode = "SIM" if self.config.sim_mode else "LIVE"
                 error_type = type(e).__name__
                 error_msg = str(e)[:200]  # Limit to 200 chars
-                self.logger.info(f"[TELEGRAM] Sending fatal error notification")
+                self.logger.info("[TELEGRAM] Sending fatal error notification")
                 self.telegram.send(
                     f"🚨 [{mode}] FATAL ERROR\n"
                     f"Type: {error_type}\n"
                     f"Message: {error_msg}\n"
                     f"BOT IS SHUTTING DOWN"
                 )
-            except:
+            except Exception:
                 pass  # Don't crash on Telegram failure
 
             self.shutdown()

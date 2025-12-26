@@ -44,7 +44,7 @@ class BearMicroLongEngine:
         Evaluate a single symbol for bear micro-long entry
         """
         # Get data
-        ticker = data.get('ticker')
+        data.get('ticker')
         df_15m = data.get('df_15m')
         df_1h = data.get('df_1h')
         btc_performance = data.get('btc_performance', 0)  # Performance relative to BTC
@@ -59,7 +59,7 @@ class BearMicroLongEngine:
 
         # Calculate indicators
         ema_20_15m = helpers.calculate_ema(df_15m, 'close', 20).iloc[-1]
-        ema_50_15m = helpers.calculate_ema(df_15m, 'close', 50).iloc[-1]
+        helpers.calculate_ema(df_15m, 'close', 50).iloc[-1]
         ema_20_1h = helpers.calculate_ema(df_1h, 'close', 20).iloc[-1]
         rsi_1h = helpers.calculate_rsi(df_1h, 'close', 14).iloc[-1]
 

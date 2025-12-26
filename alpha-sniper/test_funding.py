@@ -16,8 +16,9 @@ The bot will handle this gracefully - shorts will not be filtered by funding.
 """
 
 from config import Config
-from utils.logger import setup_logger
 from exchange import DataOnlyMexcExchange
+from utils.logger import setup_logger
+
 
 def test_funding_rate():
     """Test fetching real MEXC futures funding rates"""

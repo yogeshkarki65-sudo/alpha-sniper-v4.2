@@ -5,8 +5,8 @@ import json
 import os
 from datetime import datetime, timezone
 from typing import Any, Dict
+
 import pandas as pd
-import numpy as np
 
 
 def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
@@ -95,7 +95,7 @@ def save_json_atomic(filepath: str, data: Any):
         try:
             if os.path.exists(temp_path):
                 os.remove(temp_path)
-        except:
+        except Exception:
             pass
         # Re-raise PermissionError for caller to handle
         raise PermissionError(f"Permission denied writing to {filepath}: {e}") from e

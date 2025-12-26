@@ -14,8 +14,8 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from config import Config
-from utils.logger import setup_logger
 from utils.dynamic_filters import DynamicFilterEngine
+from utils.logger import setup_logger
 
 
 def test_dfe():
