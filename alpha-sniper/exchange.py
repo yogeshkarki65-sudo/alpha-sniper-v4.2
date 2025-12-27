@@ -574,6 +574,9 @@ class RealExchange(BaseExchange):
 
     def create_order(self, symbol, type, side, amount, price=None, params=None):
         """Create real order on MEXC"""
+        # Fix: ccxt expects params to be a dict, not None
+        if params is None:
+            params = {}
         return self._with_retries(
             lambda: self.client.create_order(symbol, type, side, amount, price, params),
             f"create_order {symbol}"
