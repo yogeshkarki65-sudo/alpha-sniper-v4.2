@@ -8,9 +8,8 @@ Simulates position management with exact same logic as LIVE mode:
 - Trailing stops
 - Max hold time
 """
-import time
-from typing import Dict, List, Optional
-from datetime import datetime, timezone, timedelta
+from typing import Dict, Optional
+
 import pandas as pd
 
 

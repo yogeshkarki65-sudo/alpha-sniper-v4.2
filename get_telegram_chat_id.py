@@ -12,8 +12,10 @@ Usage:
 4. Update TELEGRAM_CHAT_ID in /etc/alpha-sniper/alpha-sniper-live.env
 """
 
-import requests
 import sys
+
+import requests
+
 
 def get_chat_id(bot_token):
     """Get chat ID from Telegram bot updates"""
@@ -30,7 +32,7 @@ def get_chat_id(bot_token):
     try:
         resp = requests.get(url, timeout=10)
         if resp.status_code != 200:
-            print(f"❌ ERROR: Invalid bot token")
+            print("❌ ERROR: Invalid bot token")
             print(f"   HTTP {resp.status_code}: {resp.text}")
             return None
 
@@ -57,7 +59,7 @@ def get_chat_id(bot_token):
     try:
         resp = requests.get(url, timeout=10)
         if resp.status_code != 200:
-            print(f"❌ ERROR: Failed to get updates")
+            print("❌ ERROR: Failed to get updates")
             print(f"   HTTP {resp.status_code}: {resp.text}")
             return None
 
@@ -115,7 +117,7 @@ def get_chat_id(bot_token):
         print()
         print("Next steps:")
         print("1. Update your env file:")
-        print(f"   sudo nano /etc/alpha-sniper/alpha-sniper-live.env")
+        print("   sudo nano /etc/alpha-sniper/alpha-sniper-live.env")
         print(f"   Change: TELEGRAM_CHAT_ID={most_recent}")
         print()
         print("2. Restart the bot:")

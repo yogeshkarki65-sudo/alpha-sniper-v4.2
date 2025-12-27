@@ -2,6 +2,7 @@
 Telegram alert module for Alpha Sniper V4.2
 """
 import requests
+
 from utils.helpers import truncate_message
 
 

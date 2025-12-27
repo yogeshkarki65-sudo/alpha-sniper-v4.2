@@ -4,14 +4,15 @@ Trade Notification Formatter
 
 Formats trade events and sends them to Telegram via telegram_notify helper.
 """
-import sys
-import os
 import argparse
+import os
+import sys
 
 # Add scripts directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from telegram_notify import send_telegram
+
 
 def format_trade_message(args):
     """Format a trade event message"""
@@ -79,9 +80,9 @@ def main():
     success = send_telegram(message)
 
     if success:
-        print(f"Trade notification sent successfully")
+        print("Trade notification sent successfully")
     else:
-        print(f"Failed to send trade notification", file=sys.stderr)
+        print("Failed to send trade notification", file=sys.stderr)
         sys.exit(1)
 
 if __name__ == "__main__":

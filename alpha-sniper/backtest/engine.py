@@ -8,18 +8,20 @@ Orchestrates the backtesting process by:
 4. Calculating performance metrics
 """
 import sys
+from datetime import timedelta
 from pathlib import Path
 from typing import Dict, List
+
 import pandas as pd
-from datetime import datetime, timezone, timedelta
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from backtest.data_loader import BacktestDataLoader
-from backtest.portfolio import BacktestPortfolio
 from signals.pump_engine import PumpEngine
 from utils import helpers
+
+from backtest.data_loader import BacktestDataLoader
+from backtest.portfolio import BacktestPortfolio
 
 
 class SimpleLogger:
@@ -310,7 +312,7 @@ class PumpBacktester:
         self.logger.info(f"Avg Loss: ${stats['avg_loss_usd']:.2f}")
         self.logger.info(f"Best Trade: {stats['best_trade_symbol']} ${stats['best_trade_usd']:.2f}")
         self.logger.info(f"Worst Trade: {stats['worst_trade_symbol']} ${stats['worst_trade_usd']:.2f}")
-        self.logger.info(f"")
+        self.logger.info("")
         self.logger.info(f"Starting Equity: ${stats['starting_equity']:.2f}")
         self.logger.info(f"Final Equity: ${stats['final_equity']:.2f}")
         self.logger.info(f"Total P&L: ${stats['total_pnl_usd']:+.2f} ({stats['total_pnl_pct']:+.2f}%)")

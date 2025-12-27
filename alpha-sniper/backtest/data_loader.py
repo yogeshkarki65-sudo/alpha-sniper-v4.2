@@ -4,10 +4,10 @@ Data loader for backtesting
 Loads historical OHLCV data from CSV files and provides
 data in the same format as the live exchange adapter.
 """
-import pandas as pd
 from pathlib import Path
 from typing import Dict, List, Optional
-from datetime import datetime, timezone
+
+import pandas as pd
 
 
 class BacktestDataLoader:

@@ -11,7 +11,6 @@ This utility implements an ATR-based trailing stop that:
 """
 
 import time
-from utils import helpers
 
 
 class PumpTrailer:

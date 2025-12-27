@@ -6,9 +6,11 @@ Simple helper to send messages to Telegram.
 Can read credentials from env vars or /etc/alpha-sniper/alpha-sniper-live.env
 """
 import os
-import sys
-import requests
 import re
+import sys
+
+import requests
+
 
 def load_env_file(filepath="/etc/alpha-sniper/alpha-sniper-live.env"):
     """Load environment variables from a file"""

@@ -23,8 +23,6 @@ Design Philosophy:
 """
 
 import time
-import traceback
-from datetime import datetime, timezone
 
 
 class EntryDETEngine:
@@ -385,7 +383,6 @@ class EntryDETEngine:
 
         except Exception as e:
             self.logger.error(f"[Entry-DETE] Error opening position: {e}")
-            import traceback
             self.logger.exception(e)
             return False
 
