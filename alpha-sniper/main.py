@@ -94,6 +94,17 @@ class AlphaSniperBot:
             self.logger.info(f"⚡ FAST MODE ENABLED: {self.config.fast_scan_interval_seconds}s intervals")
             self.logger.info(f"   Will auto-disable after {self.config.fast_mode_max_runtime_hours} hours")
 
+        # === v4.2.3: Live test mode tracking ===
+        self.live_test_orders_today = 0
+        self.live_test_reset_date = time.strftime("%Y-%m-%d")
+        if self.config.live_test_mode:
+            self.logger.info("")
+            self.logger.info("🧪 LIVE TEST MODE ENABLED:")
+            self.logger.info(f"   Max orders per day: {self.config.max_live_test_orders_per_day}")
+            self.logger.info(f"   Max USD per order: ${self.config.max_live_test_usd_per_order:.2f}")
+            self.logger.info(f"   Auto-cancel timeout: {self.config.live_test_cancel_timeout_seconds}s")
+            self.logger.info("")
+
         # Send enhanced startup notification
         sim_data_source = getattr(self.config, 'sim_data_source', 'FAKE')
         regime = self.risk_engine.current_regime if self.risk_engine.current_regime else 'UNKNOWN'
@@ -552,6 +563,40 @@ class AlphaSniperBot:
                 self.logger.debug(f"[PumpTrailer] Error updating {position.get('symbol', 'UNKNOWN')}: {e}")
                 continue
 
+    def _check_live_test_limits(self, size_usd: float, symbol: str) -> tuple[bool, float, str]:
+        """
+        Check and enforce live test mode limits
+
+        Returns:
+            (allowed: bool, adjusted_size: float, reason: str)
+        """
+        if not self.config.live_test_mode:
+            return True, size_usd, ""
+
+        # Check if we need to reset daily counter (new day)
+        current_date = time.strftime("%Y-%m-%d")
+        if current_date != self.live_test_reset_date:
+            self.logger.info(f"[LIVE_TEST] Daily counter reset (new day: {current_date})")
+            self.live_test_orders_today = 0
+            self.live_test_reset_date = current_date
+
+        # Check daily order limit
+        if self.live_test_orders_today >= self.config.max_live_test_orders_per_day:
+            return False, 0, f"LIVE_TEST_DAILY_LIMIT_REACHED ({self.live_test_orders_today}/{self.config.max_live_test_orders_per_day})"
+
+        # Adjust size if exceeds per-order limit
+        adjusted_size = min(size_usd, self.config.max_live_test_usd_per_order)
+        if adjusted_size < size_usd:
+            self.logger.info(
+                f"[LIVE_TEST] Limiting order size for {symbol}: "
+                f"${size_usd:.2f} → ${adjusted_size:.2f} (max ${self.config.max_live_test_usd_per_order:.2f})"
+            )
+
+        # Increment counter
+        self.live_test_orders_today += 1
+
+        return True, adjusted_size, ""
+
     def _process_signals(self, signals: list):
         """
         Process new trading signals with comprehensive validation and lifecycle logging
@@ -577,6 +622,23 @@ class AlphaSniperBot:
                     add_skip_reason("CORE_" + reason.replace(" ", "_").upper()[:30])
                     self.logger.debug(f"❌ Cannot open {sig['symbol']} {sig['engine']}: {reason}")
                     continue
+
+                # === v4.2.3: Early Depth Gate - Filter out low-liquidity symbols BEFORE LiquidityGuard ===
+                if self.config.min_depth_usd > 0:
+                    try:
+                        symbol = sig['symbol']
+                        liquidity = self.exchange.get_liquidity_metrics(symbol)
+                        depth_usd = liquidity.get('depth_usd', 0)
+
+                        if depth_usd < self.config.min_depth_usd:
+                            add_skip_reason("SKIP_EARLY_DEPTH_GATE")
+                            self.logger.debug(
+                                f"[EARLY_DEPTH_GATE] REJECT {symbol} | "
+                                f"depth=${depth_usd:.0f} < min=${self.config.min_depth_usd:.0f}"
+                            )
+                            continue
+                    except Exception as e:
+                        self.logger.debug(f"[EARLY_DEPTH_GATE] Error for {sig['symbol']}: {e}, proceeding")
 
                 # Entry-DETE: Queue sig instead of opening immediately
                 if self.config.entry_dete_enabled:
@@ -732,6 +794,25 @@ class AlphaSniperBot:
 
                 else:
                     # === LIVE ORDER with full lifecycle logging ===
+
+                    # === v4.2.3: Check live test mode limits ===
+                    if self.config.live_test_mode:
+                        test_allowed, adjusted_size_usd, test_reason = self._check_live_test_limits(size_usd, symbol)
+
+                        if not test_allowed:
+                            add_skip_reason("LIVE_TEST_LIMIT")
+                            self.logger.info(
+                                f"[LIVE_TEST] REJECT {symbol} | reason={test_reason}"
+                            )
+                            continue
+
+                        # Use adjusted size
+                        if adjusted_size_usd != size_usd:
+                            size_usd = adjusted_size_usd
+                            position['size_usd'] = size_usd
+                            qty = size_usd / entry_price if entry_price > 0 else 0
+                            position['qty'] = qty
+
                     # Calculate amount in base currency
                     amount = size_usd / entry_price
 

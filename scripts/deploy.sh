@@ -314,6 +314,38 @@ main() {
     fi
 
     # ===================================================================
+    # FEATURE VERIFICATION (v4.2.3)
+    # ===================================================================
+    log_step "7.5️⃣ FEATURE VERIFICATION"
+
+    VERIFY_SCRIPT="$REPO_ROOT/scripts/verify_bot_features.py"
+
+    if [ -f "$VERIFY_SCRIPT" ]; then
+        log_info "Running feature verification tests..."
+        "$PYTHON_BIN" "$VERIFY_SCRIPT" || {
+            log_warning "Feature verification tests FAILED (non-blocking)"
+            log_warning "Review test output above for details"
+        }
+        log_success "Feature verification completed"
+    else
+        log_info "Feature verification script not found, skipping: $VERIFY_SCRIPT"
+    fi
+
+    # ===================================================================
+    # UNIT TESTS (if present)
+    # ===================================================================
+    if [ -d "$REPO_ROOT/tests" ]; then
+        log_info "Running unit tests..."
+        if command -v pytest &> /dev/null; then
+            "$PYTHON_BIN" -m pytest "$REPO_ROOT/tests" -v || {
+                log_warning "Unit tests FAILED (non-blocking)"
+            }
+        else
+            log_info "pytest not installed, skipping unit tests"
+        fi
+    fi
+
+    # ===================================================================
     # RESTART SERVICE
     # ===================================================================
     log_step "8️⃣ RESTART SERVICE"
@@ -373,6 +405,16 @@ main() {
             log_warning "Bot may still be initializing - check logs manually"
             log_info "Recent logs:"
             tail -20 "$LOG_FILE" 2>/dev/null || echo "Cannot read log file"
+        fi
+
+        # Check 3: Look for startup errors (v4.2.3)
+        log_info "Checking for startup errors..."
+        ERROR_PATTERNS="(FATAL|Exception|Traceback|Failed to|Cannot|Error:)"
+
+        if tail -100 "$LOG_FILE" 2>/dev/null | grep -i -E "$ERROR_PATTERNS" | head -5; then
+            log_warning "Potential errors detected in logs (review above)"
+        else
+            log_success "No obvious errors in recent logs"
         fi
 
         # Show service status

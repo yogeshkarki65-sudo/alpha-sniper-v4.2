@@ -537,14 +537,21 @@ class RealExchange(BaseExchange):
             # Calculate notional (cost)
             notional = qty_rounded * price
 
-            # Calculate minimum trade size accounting for fees
+            # Calculate dynamic per-symbol minimum trade size
+            # Formula: max(MIN_VIABLE_TRADE_USD, min_notional*(1+fee_buffer), min_qty*price*(1+qty_buffer))
+            min_trade_components = [self.config.min_viable_trade_usd]
+
             if min_notional > 0:
-                min_trade_usd = max(
-                    self.config.min_viable_trade_usd,
-                    min_notional * (1 + 2 * taker_fee + self.config.validation_fee_buffer_pct / 100)
-                )
-            else:
-                min_trade_usd = self.config.min_viable_trade_usd
+                # Add fee buffer to min_notional (includes 2x taker fee + extra buffer)
+                min_from_notional = min_notional * (1 + 2 * taker_fee + self.config.validation_fee_buffer_pct / 100)
+                min_trade_components.append(min_from_notional)
+
+            if min_qty > 0 and price > 0:
+                # Add qty buffer to min_qty requirement
+                min_from_qty = min_qty * price * (1 + self.config.validation_qty_buffer_pct / 100)
+                min_trade_components.append(min_from_qty)
+
+            min_trade_usd = max(min_trade_components)
 
             # Validation checks
             details = {
@@ -916,14 +923,21 @@ class DataOnlyMexcExchange(BaseExchange):
             # Calculate notional (cost)
             notional = qty_rounded * price
 
-            # Calculate minimum trade size accounting for fees
+            # Calculate dynamic per-symbol minimum trade size
+            # Formula: max(MIN_VIABLE_TRADE_USD, min_notional*(1+fee_buffer), min_qty*price*(1+qty_buffer))
+            min_trade_components = [self.config.min_viable_trade_usd]
+
             if min_notional > 0:
-                min_trade_usd = max(
-                    self.config.min_viable_trade_usd,
-                    min_notional * (1 + 2 * taker_fee + self.config.validation_fee_buffer_pct / 100)
-                )
-            else:
-                min_trade_usd = self.config.min_viable_trade_usd
+                # Add fee buffer to min_notional (includes 2x taker fee + extra buffer)
+                min_from_notional = min_notional * (1 + 2 * taker_fee + self.config.validation_fee_buffer_pct / 100)
+                min_trade_components.append(min_from_notional)
+
+            if min_qty > 0 and price > 0:
+                # Add qty buffer to min_qty requirement
+                min_from_qty = min_qty * price * (1 + self.config.validation_qty_buffer_pct / 100)
+                min_trade_components.append(min_from_qty)
+
+            min_trade_usd = max(min_trade_components)
 
             # Validation checks
             details = {

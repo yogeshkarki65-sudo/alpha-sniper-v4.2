@@ -100,11 +100,13 @@ class Config:
         self.pump_max_24h_extended = float(get_env("PUMP_MAX_24H_EXTENDED", "12.0"))  # Reject if already pumped > this %
 
         # === ORDER VIABILITY & EXCHANGE VALIDATION (v4.2.3) ===
-        self.min_viable_trade_usd = float(get_env("MIN_VIABLE_TRADE_USD", "10.0"))  # Minimum trade size after all scaling
+        self.min_viable_trade_usd = float(get_env("MIN_VIABLE_TRADE_USD", "5.0"))  # Base minimum trade size (lowered from 10.0)
         self.max_spread_pct_order = float(get_env("MAX_SPREAD_PCT_ORDER", "0.30"))  # Reject if spread > this %
         self.min_depth_multiple = float(get_env("MIN_DEPTH_MULTIPLE", "200"))  # depth_usd must be >= adjusted_usd * this
+        self.min_depth_usd = float(get_env("MIN_DEPTH_USD", "0"))  # Minimum absolute depth (0 = disabled, use multiple only)
         self.orderbook_depth_levels = int(get_env("ORDERBOOK_DEPTH_LEVELS", "10"))  # Number of orderbook levels to analyze
-        self.validation_fee_buffer_pct = float(get_env("VALIDATION_FEE_BUFFER_PCT", "0.20"))  # Extra buffer for fees/slippage (20%)
+        self.validation_fee_buffer_pct = float(get_env("VALIDATION_FEE_BUFFER_PCT", "0.50"))  # Extra buffer for fees/slippage (50%)
+        self.validation_qty_buffer_pct = float(get_env("VALIDATION_QTY_BUFFER_PCT", "2.0"))  # Buffer for min_qty calculation (2%)
         self.exchange_taker_fee_fallback = float(get_env("EXCHANGE_TAKER_FEE_FALLBACK", "0.001"))  # 0.1% fallback fee if not available
 
         # === PRODUCTION SMOKE TESTS (v4.2.3) ===
@@ -112,6 +114,12 @@ class Config:
         self.smoke_test_allow_orders = self.parse_bool(get_env("SMOKE_TEST_ALLOW_ORDERS", "false"))  # Allow real orders in smoke test
         self.smoke_test_symbol = get_env("SMOKE_TEST_SYMBOL", "BTC/USDT")  # Symbol for smoke tests
         self.smoke_test_usd = float(get_env("SMOKE_TEST_USD", "10.0"))  # USD size for smoke test orders
+
+        # === LIVE TEST MODE (v4.2.3) ===
+        self.live_test_mode = self.parse_bool(get_env("LIVE_TEST_MODE", "false"))  # Enable safe live testing with real orders
+        self.max_live_test_orders_per_day = int(get_env("MAX_LIVE_TEST_ORDERS_PER_DAY", "1"))  # Max orders per 24h in live test mode
+        self.max_live_test_usd_per_order = float(get_env("MAX_LIVE_TEST_USD_PER_ORDER", "7.5"))  # Max USD per order in live test mode
+        self.live_test_cancel_timeout_seconds = int(get_env("LIVE_TEST_CANCEL_TIMEOUT_SECONDS", "10"))  # Cancel if not filled within this time
 
         # UPGRADE E: Correlation-Aware Portfolio Heat
         self.correlation_limit_enabled = self.parse_bool(get_env("CORRELATION_LIMIT_ENABLED", "true"))
