@@ -4,12 +4,11 @@ Scanner for Alpha Sniper V4.2
 - Orchestrates all signal engines
 - Returns prioritized signals
 """
-from utils import helpers
-
 from signals.bear_micro_long import BearMicroLongEngine
 from signals.long_engine import LongEngine
 from signals.pump_engine import PumpEngine
 from signals.short_engine import ShortEngine
+from utils import helpers
 
 
 class Scanner:

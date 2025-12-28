@@ -30,8 +30,8 @@ dev = [
 ]
 
 [tool.setuptools]
-packages = ["alpha_sniper"]
-package-dir = {"" = "alpha-sniper"}
+packages = ["alpha_sniper", "alpha_sniper.alpha_sniper"]
+package-dir = {"alpha_sniper" = "alpha-sniper"}
 
 [tool.setuptools.package-data]
 alpha_sniper = ["*.py"]

@@ -1,0 +1,13 @@
+# Alpha Sniper V4.2 - Development Dependencies
+# Install with: pip install -r requirements.txt -r requirements-dev.txt
+
+# Testing
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+pytest-mock>=3.11.0
+
+# Linting
+ruff>=0.1.0
+
+# Type checking (optional)
+# mypy>=1.0.0
