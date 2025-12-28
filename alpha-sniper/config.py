@@ -90,6 +90,15 @@ class Config:
         self.liquidity_depth_good_level = float(get_env("LIQUIDITY_DEPTH_GOOD_LEVEL", "20000"))
         self.liquidity_min_factor = float(get_env("LIQUIDITY_MIN_FACTOR", "0.25"))
 
+        # === LIQUIDITY REJECTION THRESHOLDS (v4.2.2) ===
+        self.min_liq_factor = float(get_env("MIN_LIQ_FACTOR", "0.4"))  # Reject if factor < this
+        self.min_adjusted_usd = float(get_env("MIN_ADJUSTED_USD", "5.0"))  # Reject if adjusted size < this
+
+        # === FRESH IMPULSE PUMP DETECTION (v4.2.2) ===
+        self.pump_spike_mult = float(get_env("PUMP_SPIKE_MULT", "2.0"))  # Current 15m volume must be >= 2x previous 15m
+        self.pump_spike_lookback = int(get_env("PUMP_SPIKE_LOOKBACK", "1"))  # Number of candles to compare
+        self.pump_max_24h_extended = float(get_env("PUMP_MAX_24H_EXTENDED", "12.0"))  # Reject if already pumped > this %
+
         # UPGRADE E: Correlation-Aware Portfolio Heat
         self.correlation_limit_enabled = self.parse_bool(get_env("CORRELATION_LIMIT_ENABLED", "true"))
         self.max_correlated_positions = int(get_env("MAX_CORRELATED_POSITIONS", "2"))

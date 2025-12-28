@@ -500,6 +500,17 @@ class RiskEngine:
                 # Apply scaling
                 final_size = base_size * liquidity_factor
 
+                # === v4.2.2: REJECT if liquidity too low (instead of scaling to tiny size) ===
+                if liquidity_factor < self.config.min_liq_factor or final_size < self.config.min_adjusted_usd:
+                    self.logger.info(
+                        f"[LiquidityGuard] REJECT symbol={symbol} | "
+                        f"requested_size=${base_size:.2f} | adjusted_size=${final_size:.2f} | "
+                        f"spread={spread_pct:.2f}% | depth=${depth_usd:.0f} | "
+                        f"factor={liquidity_factor:.2f} | "
+                        f"reason={'factor<'+str(self.config.min_liq_factor) if liquidity_factor < self.config.min_liq_factor else 'size<$'+str(self.config.min_adjusted_usd)}"
+                    )
+                    return 0.0  # Signal to reject trade
+
                 # Only log if actually scaling down significantly
                 if liquidity_factor < 0.95:
                     self.logger.info(
@@ -541,6 +552,11 @@ class RiskEngine:
                     except Exception:
                         pass
                     self.daily_loss_limit_hit = True
+                # === v4.2.2: CORE rejection observability ===
+                self.logger.info(
+                    f"[CORE_REJECT] symbol={symbol} | reason=DAILY_LOSS_HARD | "
+                    f"session_pnl_pct={session_pnl_pct*100:.2f}% | limit=-2.0%"
+                )
                 return False, "Daily loss limit -2%"
 
         # Check anti-repeat cooldown (symbol+side specific)
@@ -555,6 +571,11 @@ class RiskEngine:
                         self.logger.info(f"[RISK] Cooldown active for {symbol} {side}: {float(remaining_hours):.1f}h remaining")
                     except Exception:
                         pass
+                    # === v4.2.2: CORE rejection observability ===
+                    self.logger.info(
+                        f"[CORE_REJECT] symbol={symbol} | reason=COOLDOWN | "
+                        f"side={side} | remaining_hours={remaining_hours:.1f}"
+                    )
                     return False, f"Cooldown {remaining_hours:.1f}h"
                 else:
                     # Cooldown expired, remove from tracker
@@ -583,6 +604,11 @@ class RiskEngine:
                             f"No new trades will be opened until next daily reset."
                         )
                     self.daily_loss_alert_sent = True
+                # === v4.2.2: CORE rejection observability ===
+                self.logger.info(
+                    f"[CORE_REJECT] symbol={symbol} | reason=DAILY_LOSS_LIMIT | "
+                    f"daily_loss_pct={daily_loss_pct*100:.2f}% | max_loss_pct={self.config.max_daily_loss_pct*100:.2f}%"
+                )
                 return False, f"Daily loss limit hit ({daily_loss_pct*100:.2f}%)"
 
         # === UPGRADE E: Correlation-Aware Portfolio Heat ===
@@ -605,10 +631,21 @@ class RiskEngine:
                     f"bucket={bucket} already has {bucket_count} positions {bucket_symbols} | "
                     f"max={self.config.max_correlated_positions}"
                 )
+                # === v4.2.2: CORE rejection observability ===
+                self.logger.info(
+                    f"[CORE_REJECT] symbol={symbol} | reason=CORRELATION_LIMIT | "
+                    f"bucket={bucket} | bucket_count={bucket_count} | max={self.config.max_correlated_positions} | "
+                    f"bucket_symbols={bucket_symbols}"
+                )
                 return False, f"Bucket {bucket} limit reached ({bucket_count}/{self.config.max_correlated_positions})"
 
         # Check max concurrent positions
         if len(self.open_positions) >= self.config.max_concurrent_positions:
+            # === v4.2.2: CORE rejection observability ===
+            self.logger.info(
+                f"[CORE_REJECT] symbol={symbol} | reason=MAX_POSITIONS | "
+                f"current_positions={len(self.open_positions)} | max={self.config.max_concurrent_positions}"
+            )
             return False, f"Max concurrent positions reached ({len(self.open_positions)})"
 
         # Check pump-specific limits
@@ -616,6 +653,11 @@ class RiskEngine:
         if engine == 'pump':
             pump_count = sum(1 for p in self.open_positions if p.get('engine') == 'pump')
             if pump_count >= self.config.pump_max_concurrent:
+                # === v4.2.2: CORE rejection observability ===
+                self.logger.info(
+                    f"[CORE_REJECT] symbol={symbol} | reason=MAX_PUMP_POSITIONS | "
+                    f"pump_count={pump_count} | max={self.config.pump_max_concurrent}"
+                )
                 return False, f"Max pump positions reached ({pump_count})"
 
         # Check portfolio heat
@@ -629,6 +671,12 @@ class RiskEngine:
             msg = (
                 f"Portfolio heat limit "
                 f"({current_pct:.3f}% + {engine_pct:.3f}% > {max_pct:.2f}%)"
+            )
+            # === v4.2.2: CORE rejection observability ===
+            self.logger.info(
+                f"[CORE_REJECT] symbol={symbol} | reason=PORTFOLIO_HEAT | "
+                f"current_heat={current_pct:.3f}% | engine_risk={engine_pct:.3f}% | "
+                f"total={current_pct+engine_pct:.3f}% | max={max_pct:.2f}%"
             )
             return False, msg
 

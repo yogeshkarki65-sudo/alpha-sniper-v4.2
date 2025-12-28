@@ -198,6 +198,27 @@ class PumpEngine:
         else:
             return_24h = 0
 
+        # === v4.2.2: FRESH IMPULSE detection (volume spike in recent candle) ===
+        fresh_impulse = False
+        if len(df_15m) >= 2:
+            try:
+                last_15m_volume = df_15m['volume'].iloc[-1]
+                prev_15m_volume = df_15m['volume'].iloc[-2]
+                volume_spike_ratio = last_15m_volume / prev_15m_volume if prev_15m_volume > 0 else 0
+
+                if volume_spike_ratio >= self.config.pump_spike_mult:
+                    fresh_impulse = True
+
+                # SIDEWAYS regime protection: reject if already extended
+                if regime == "SIDEWAYS" and return_24h > self.config.pump_max_24h_extended:
+                    if debug_rejections is not None:
+                        debug_rejections.append(
+                            f"{symbol}: ALREADY_EXTENDED (ret_24h={return_24h:.1f}% > max={self.config.pump_max_24h_extended}%)"
+                        )
+                    return None
+            except Exception as e:
+                self.logger.debug(f"[PUMP] Fresh impulse check error for {symbol}: {e}")
+
         # Check if this is a new listing (bypass stricter filters if enabled)
         is_new_listing = False
         if self.config.pump_new_listing_bypass:
