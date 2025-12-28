@@ -554,19 +554,27 @@ class AlphaSniperBot:
 
     def _process_signals(self, signals: list):
         """
-        Process new trading signals
+        Process new trading signals with comprehensive validation and lifecycle logging
         """
         self.logger.info(f"📡 Processing {len(signals)} signal(s)...")
 
         signals_opened = 0
         signals_queued = 0
 
+        # === v4.2.3: Skip reason tracking ===
+        skip_reasons = {}  # {reason_code: count}
+
+        def add_skip_reason(reason: str):
+            """Track skip reasons for aggregate summary"""
+            skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
+
         for sig in signals:
             try:
-                # Check if we can open new position
+                # Check if we can open new position (CORE filters)
                 can_open, reason = self.risk_engine.can_open_new_position(sig)
 
                 if not can_open:
+                    add_skip_reason("CORE_" + reason.replace(" ", "_").upper()[:30])
                     self.logger.debug(f"❌ Cannot open {sig['symbol']} {sig['engine']}: {reason}")
                     continue
 
@@ -579,15 +587,74 @@ class AlphaSniperBot:
                 # Get current price (use entry_price from sig)
                 entry_price = sig['entry_price']
                 stop_loss = sig['stop_loss']
+                symbol = sig['symbol']
 
-                # Calculate position size
+                # Calculate position size (includes LiquidityGuard scaling)
                 size_usd = self.risk_engine.calculate_position_size(sig, entry_price, stop_loss)
 
-                # Minimum position size (adjusted for account size)
-                min_position_size = max(1.0, self.config.starting_equity * 0.01)  # 1% of equity or $1, whichever is higher
-                if size_usd < min_position_size:
-                    self.logger.debug(f"❌ Position size too small for {sig['symbol']}: ${size_usd:.2f} (min: ${min_position_size:.2f})")
+                # === v4.2.3: Viability Gate 1 - Check if LiquidityGuard rejected (returns 0.0) ===
+                if size_usd <= 0:
+                    add_skip_reason("SKIP_TOO_SMALL_AFTER_LIQUIDITY")
+                    self.logger.debug(f"❌ [{symbol}] LiquidityGuard rejected (size={size_usd})")
                     continue
+
+                # === v4.2.3: Viability Gate 2 - Spread and Depth checks ===
+                try:
+                    liquidity = self.exchange.get_liquidity_metrics(symbol)
+                    spread_pct = liquidity.get('spread_pct', 0.5)
+                    depth_usd = liquidity.get('depth_usd', 10000)
+
+                    # Check spread
+                    if spread_pct > self.config.max_spread_pct_order:
+                        add_skip_reason("SKIP_SPREAD_TOO_HIGH")
+                        self.logger.info(
+                            f"[VIABILITY_CHECK] REJECT {symbol} | reason=SPREAD_TOO_HIGH | "
+                            f"spread={spread_pct:.2f}% > max={self.config.max_spread_pct_order:.2f}%"
+                        )
+                        continue
+
+                    # Check depth
+                    required_depth = size_usd * self.config.min_depth_multiple
+                    if depth_usd < required_depth:
+                        add_skip_reason("SKIP_DEPTH_TOO_LOW")
+                        self.logger.info(
+                            f"[VIABILITY_CHECK] REJECT {symbol} | reason=DEPTH_TOO_LOW | "
+                            f"depth=${depth_usd:.0f} < required=${required_depth:.0f} "
+                            f"(size=${size_usd:.2f} * {self.config.min_depth_multiple}x)"
+                        )
+                        continue
+
+                    # Log viability check success
+                    self.logger.debug(
+                        f"[VIABILITY_CHECK] PASS {symbol} | size=${size_usd:.2f} | "
+                        f"spread={spread_pct:.2f}% | depth=${depth_usd:.0f}"
+                    )
+
+                except Exception as e:
+                    self.logger.warning(f"[VIABILITY_CHECK] Error for {symbol}: {e}, proceeding with caution")
+
+                # === v4.2.3: Exchange Validation ===
+                if not self.config.sim_mode:
+                    # Validate against exchange limits (minQty, minNotional, precision)
+                    valid, reason_code, details = self.exchange.validate_order(symbol, size_usd, entry_price)
+
+                    if not valid:
+                        add_skip_reason(reason_code)
+                        self.logger.info(
+                            f"[ORDER_VALIDATION] REJECT {symbol} | reason={reason_code} | "
+                            f"size=${size_usd:.2f} | price={entry_price:.6f} | "
+                            f"details={details}"
+                        )
+                        continue
+
+                    self.logger.debug(f"[ORDER_VALIDATION] PASS {symbol} | {details}")
+                else:
+                    # Minimal validation for sim mode
+                    valid, reason_code, details = self.exchange.validate_order(symbol, size_usd, entry_price)
+                    if not valid:
+                        add_skip_reason(reason_code)
+                        self.logger.debug(f"[SIM_VALIDATION] REJECT {symbol} | reason={reason_code}")
+                        continue
 
                 # Calculate risk % and quantities
                 risk_pct = self.risk_engine.get_risk_per_trade(sig.get('engine', 'standard'))
@@ -664,70 +731,129 @@ class AlphaSniperBot:
                         self.logger.warning(f"[TELEGRAM] Failed to send enhanced trade open notification: {e}")
 
                 else:
-                    # LIVE order
+                    # === LIVE ORDER with full lifecycle logging ===
                     # Calculate amount in base currency
                     amount = size_usd / entry_price
 
-                    order = self.exchange.create_order(
-                        symbol=position['symbol'],
-                        type='market',
-                        side='buy' if position['side'] == 'long' else 'sell',
-                        amount=amount,
-                        params={'leverage': 1}  # 1x isolated
+                    # Log order validation start
+                    self.logger.info(
+                        f"[ORDER_VALIDATING] {symbol} | side={position['side']} | "
+                        f"size=${size_usd:.2f} | amount={amount:.6f} | price={entry_price:.6f}"
                     )
 
-                    if order and order.get('id'):
-                        self.logger.info(
-                            f"✅ [LIVE] Opened {position['side']} | "
-                            f"{position['symbol']} | "
-                            f"Size: ${size_usd:.2f} | "
-                            f"Order ID: {order['id']}"
+                    try:
+                        # Attempt to create order
+                        order = self.exchange.create_order(
+                            symbol=position['symbol'],
+                            type='market',
+                            side='buy' if position['side'] == 'long' else 'sell',
+                            amount=amount,
+                            params={'leverage': 1}  # 1x isolated
                         )
 
-                        position['order_id'] = order['id']
-                        self.risk_engine.add_position(position)
-                        signals_opened += 1
+                        # Check if order succeeded
+                        if order and order.get('id'):
+                            # Extract filled details
+                            order_id = order.get('id')
+                            filled_qty = order.get('filled', amount)
+                            avg_price = order.get('average', order.get('price', entry_price))
+                            order_status = order.get('status', 'unknown')
 
-                        # Send enhanced Telegram notification for LIVE open
-                        try:
-                            target = sig.get('tp_4r', sig.get('tp_2r', 0))
-                            r_multiple = None
-                            if stop_loss > 0 and entry_price > 0:
-                                risk_per_unit = abs(entry_price - stop_loss)
-                                if risk_per_unit > 0 and target > 0:
-                                    reward_per_unit = abs(target - entry_price)
-                                    r_multiple = reward_per_unit / risk_per_unit
-
-                            self.alert_mgr.send_trade_open(
-                                symbol=position['symbol'],
-                                side=position['side'].upper(),
-                                engine=position['engine'].upper(),
-                                regime=position['regime'],
-                                size=amount,
-                                entry=entry_price,
-                                stop=stop_loss,
-                                target=target if target > 0 else None,
-                                leverage=1.0,
-                                risk_pct=risk_pct * 100,
-                                r_multiple=r_multiple
+                            # Log order placed
+                            self.logger.info(
+                                f"[ORDER_PLACED] {symbol} | id={order_id} | "
+                                f"side={position['side']} | amount={amount:.6f} | status={order_status}"
                             )
-                            self.logger.info(f"[TELEGRAM] Sent enhanced LIVE trade open notification for {position['symbol']}")
-                        except Exception as e:
-                            self.logger.warning(f"[TELEGRAM] Failed to send enhanced LIVE trade open notification: {e}")
-                    else:
-                        self.logger.error(f"🔴 Failed to create order for {position['symbol']}")
+
+                            # Log order filled (for market orders, usually immediate)
+                            if order_status in ['closed', 'filled']:
+                                self.logger.info(
+                                    f"[ORDER_FILLED] {symbol} | id={order_id} | "
+                                    f"filled_qty={filled_qty:.6f} | avg_price={avg_price:.6f}"
+                                )
+
+                            # Success - add position
+                            self.logger.info(
+                                f"✅ [LIVE] Opened {position['side']} | "
+                                f"{position['symbol']} | "
+                                f"Size: ${size_usd:.2f} | "
+                                f"Order ID: {order_id}"
+                            )
+
+                            position['order_id'] = order_id
+                            self.risk_engine.add_position(position)
+                            signals_opened += 1
+
+                            # Send enhanced Telegram notification for LIVE open
+                            try:
+                                target = sig.get('tp_4r', sig.get('tp_2r', 0))
+                                r_multiple = None
+                                if stop_loss > 0 and entry_price > 0:
+                                    risk_per_unit = abs(entry_price - stop_loss)
+                                    if risk_per_unit > 0 and target > 0:
+                                        reward_per_unit = abs(target - entry_price)
+                                        r_multiple = reward_per_unit / risk_per_unit
+
+                                self.alert_mgr.send_trade_open(
+                                    symbol=position['symbol'],
+                                    side=position['side'].upper(),
+                                    engine=position['engine'].upper(),
+                                    regime=position['regime'],
+                                    size=amount,
+                                    entry=entry_price,
+                                    stop=stop_loss,
+                                    target=target if target > 0 else None,
+                                    leverage=1.0,
+                                    risk_pct=risk_pct * 100,
+                                    r_multiple=r_multiple
+                                )
+                                self.logger.info(f"[TELEGRAM] Sent enhanced LIVE trade open notification for {symbol}")
+                            except Exception as e:
+                                self.logger.warning(f"[TELEGRAM] Failed to send LIVE trade open notification: {e}")
+
+                        else:
+                            # Order returned None or no ID - exchange rejected
+                            add_skip_reason("EXCHANGE_REJECTED")
+                            self.logger.error(
+                                f"[ORDER_REJECTED] {symbol} | reason=EXCHANGE_REJECTED | "
+                                f"order_response={order}"
+                            )
+
+                    except Exception as e:
+                        # Exception during order creation
+                        add_skip_reason("ORDER_EXCEPTION")
+                        error_msg = str(e)
+                        self.logger.error(
+                            f"[ORDER_EXCEPTION] {symbol} | error={error_msg} | "
+                            f"error_type={type(e).__name__}"
+                        )
+
+                        # Try to extract exchange response if available
+                        if hasattr(e, 'response'):
+                            try:
+                                response_payload = getattr(e, 'response', {})
+                                self.logger.error(f"[ORDER_EXCEPTION] Exchange response: {response_payload}")
+                            except Exception:
+                                pass
 
             except Exception as e:
                 self.logger.error(f"Error processing sig {sig.get('symbol', 'UNKNOWN')}: {e}")
                 continue
 
-        # Log results
+        # === v4.2.3: Log results with aggregated skip reasons ===
         if signals_queued > 0:
             self.logger.info(f"🎯 Queued {signals_queued} signal(s) for Entry-DETE confirmation")
+
         if signals_opened > 0:
             self.logger.info(f"✅ Opened {signals_opened} new position(s)")
+
         if signals_opened == 0 and signals_queued == 0:
-            self.logger.info("📊 No new positions opened or queued")
+            if skip_reasons:
+                # Format skip reasons for logging
+                reasons_str = " | ".join([f"{k}={v}" for k, v in sorted(skip_reasons.items(), key=lambda x: -x[1])])
+                self.logger.info(f"📊 No new positions opened | skip_reasons: {reasons_str}")
+            else:
+                self.logger.info("📊 No new positions opened or queued (no signals processed)")
 
     def _log_cycle_summary(self):
         """

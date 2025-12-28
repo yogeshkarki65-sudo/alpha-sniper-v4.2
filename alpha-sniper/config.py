@@ -99,6 +99,20 @@ class Config:
         self.pump_spike_lookback = int(get_env("PUMP_SPIKE_LOOKBACK", "1"))  # Number of candles to compare
         self.pump_max_24h_extended = float(get_env("PUMP_MAX_24H_EXTENDED", "12.0"))  # Reject if already pumped > this %
 
+        # === ORDER VIABILITY & EXCHANGE VALIDATION (v4.2.3) ===
+        self.min_viable_trade_usd = float(get_env("MIN_VIABLE_TRADE_USD", "10.0"))  # Minimum trade size after all scaling
+        self.max_spread_pct_order = float(get_env("MAX_SPREAD_PCT_ORDER", "0.30"))  # Reject if spread > this %
+        self.min_depth_multiple = float(get_env("MIN_DEPTH_MULTIPLE", "200"))  # depth_usd must be >= adjusted_usd * this
+        self.orderbook_depth_levels = int(get_env("ORDERBOOK_DEPTH_LEVELS", "10"))  # Number of orderbook levels to analyze
+        self.validation_fee_buffer_pct = float(get_env("VALIDATION_FEE_BUFFER_PCT", "0.20"))  # Extra buffer for fees/slippage (20%)
+        self.exchange_taker_fee_fallback = float(get_env("EXCHANGE_TAKER_FEE_FALLBACK", "0.001"))  # 0.1% fallback fee if not available
+
+        # === PRODUCTION SMOKE TESTS (v4.2.3) ===
+        self.real_market_smoke_test = self.parse_bool(get_env("REAL_MARKET_SMOKE_TEST", "false"))  # Enable smoke tests
+        self.smoke_test_allow_orders = self.parse_bool(get_env("SMOKE_TEST_ALLOW_ORDERS", "false"))  # Allow real orders in smoke test
+        self.smoke_test_symbol = get_env("SMOKE_TEST_SYMBOL", "BTC/USDT")  # Symbol for smoke tests
+        self.smoke_test_usd = float(get_env("SMOKE_TEST_USD", "10.0"))  # USD size for smoke test orders
+
         # UPGRADE E: Correlation-Aware Portfolio Heat
         self.correlation_limit_enabled = self.parse_bool(get_env("CORRELATION_LIMIT_ENABLED", "true"))
         self.max_correlated_positions = int(get_env("MAX_CORRELATED_POSITIONS", "2"))
