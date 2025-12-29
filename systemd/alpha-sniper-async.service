@@ -13,11 +13,12 @@ WorkingDirectory=/opt/alpha-sniper
 # Environment file (async config)
 EnvironmentFile=-/opt/alpha-sniper/alpha-sniper/.env.async
 
-# Pre-start checks and directory creation
-ExecStartPre=/bin/mkdir -p /var/lib/alpha-sniper-async
-ExecStartPre=/bin/mkdir -p /opt/alpha-sniper/logs-async
-ExecStartPre=/bin/chown -R ubuntu:ubuntu /var/lib/alpha-sniper-async
-ExecStartPre=/bin/chown -R ubuntu:ubuntu /opt/alpha-sniper/logs-async
+# Pre-start checks (directories should be created manually with correct permissions)
+# Run these commands once before starting:
+#   sudo mkdir -p /var/lib/alpha-sniper-async /opt/alpha-sniper/logs-async
+#   sudo chown -R ubuntu:ubuntu /var/lib/alpha-sniper-async /opt/alpha-sniper/logs-async
+ExecStartPre=/bin/bash -c 'test -d /var/lib/alpha-sniper-async || (echo "ERROR: /var/lib/alpha-sniper-async does not exist. Create it first." && exit 1)'
+ExecStartPre=/bin/bash -c 'test -d /opt/alpha-sniper/logs-async || (echo "ERROR: /opt/alpha-sniper/logs-async does not exist. Create it first." && exit 1)'
 
 # Start command - async bot
 ExecStart=/opt/alpha-sniper/venv/bin/python /opt/alpha-sniper/app_async.py
