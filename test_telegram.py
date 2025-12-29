@@ -11,6 +11,19 @@ from pathlib import Path
 # Add alpha-sniper to path
 sys.path.insert(0, str(Path(__file__).parent / "alpha-sniper"))
 
+# Load .env.async file manually before importing settings
+env_file = Path(__file__).parent / "alpha-sniper" / ".env.async"
+if env_file.exists():
+    print(f"Loading environment from {env_file}...")
+    with open(env_file) as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith('#') and '=' in line:
+                key, value = line.split('=', 1)
+                os.environ[key.strip()] = value.strip()
+else:
+    print(f"⚠️  Warning: {env_file} not found, using default .env")
+
 from config.settings import get_settings
 from notify.telegram_async import AsyncTelegram
 
@@ -23,7 +36,7 @@ async def test_telegram():
     print()
 
     # Load settings
-    print("Loading settings from .env.async...")
+    print("Loading settings...")
     settings = get_settings()
 
     print(f"TELEGRAM_TOKEN: {'✅ Present' if settings.TELEGRAM_TOKEN else '❌ Missing'}")
