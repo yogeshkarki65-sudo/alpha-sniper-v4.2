@@ -1,14 +1,32 @@
 # Alpha Sniper v4.2 - Async Refactor Status
 
 **Branch:** `claude/fix-issues-018PzVLhR8jpyJBusPvozqDS`
-**Status:** 🟡 **FOUNDATION COMPLETE - INTEGRATION PENDING**
+**Status:** 🟡 **FOUNDATION COMPLETE - READY FOR DEPLOYMENT**
 **Last Updated:** 2025-12-29
 
 ---
 
-## ⚠️ CRITICAL: THIS IS NOT YET INTEGRATED
+## ⚠️ IMPORTANT: Deployment Approach
 
-The async refactor components are **standalone modules** that do NOT modify your existing production bot. Your current `main.py` continues to use synchronous code and will work exactly as before.
+The async refactor is a **separate application** (`app_async.py`) that runs independently from your current production bot.
+
+### Two Deployment Options:
+
+**Option 1: Side-by-Side (RECOMMENDED FOR TESTING)**
+- Keep current sync bot running on `alpha-sniper-live.service`
+- Run async bot on new service `alpha-sniper-async.service`
+- Compare performance and stability
+- Gradual migration
+
+**Option 2: Direct Replacement**
+- Stop sync bot
+- Deploy async bot
+- Higher risk but immediate performance gains
+
+### Current Production Status:
+- ✅ Sync bot running in LIVE mode (SIM_MODE removed)
+- ✅ LIVE_TEST_MODE enabled (3 orders/day @ $7.50 max)
+- ⏳ Async bot ready but not deployed
 
 ---
 
@@ -228,14 +246,18 @@ Update `requirements.txt` with async deps
 2. ⏳ Create and run smoke tests
 3. ⏳ Validate each async component in isolation
 
-### Phase 2: Integration Testing (SIM MODE)
+### Phase 2: Integration Testing (LIVE_TEST_MODE)
+⚠️ **NOTE:** SIM_MODE has been removed from the codebase. Use LIVE_TEST_MODE for safe testing.
+
 1. ⏳ Integrate engines with async scanner
-2. ⏳ Test full scan loop in SIM mode
+2. ⏳ Test full scan loop in LIVE_TEST_MODE
 3. ⏳ Validate indicator cache sharing
 4. ⏳ Test DB persistence
 5. ⏳ Test Telegram notifications
 
-### Phase 3: Load Testing (SIM MODE)
+### Phase 3: Load Testing (LIVE_TEST_MODE)
+⚠️ **NOTE:** Use LIVE_TEST_MODE with max 3 orders/day @ $7.50 each
+
 1. ⏳ Run continuous scans for 24h
 2. ⏳ Monitor memory/CPU usage
 3. ⏳ Validate no resource leaks
