@@ -33,8 +33,6 @@ class Config:
                 value = value.strip()
             return value
 
-        self.sim_mode = self.parse_bool(get_env("SIM_MODE", "true"))
-        self.sim_data_source = get_env("SIM_DATA_SOURCE", "FAKE").upper()
         self.mexc_api_key = get_env("MEXC_API_KEY", "")
         self.mexc_secret_key = get_env("MEXC_SECRET_KEY", "")
         self.mexc_spot_enabled = self.parse_bool(get_env("MEXC_SPOT_ENABLED", "true"))
@@ -200,9 +198,9 @@ class Config:
         self.drift_detection_enabled = self.parse_bool(get_env("DRIFT_DETECTION_ENABLED", "true"))
         self.drift_max_stall_multiplier = int(get_env("DRIFT_MAX_STALL_MULTIPLIER", "3"))  # max(3 * scan_interval, 600s)
 
-        if not self.sim_mode:
-            if not self.mexc_api_key or not self.mexc_secret_key:
-                raise Exception("Live mode requires MEXC_API_KEY and MEXC_SECRET_KEY in the environment")
+        # Always LIVE mode - validate API keys
+        if not self.mexc_api_key or not self.mexc_secret_key:
+            raise Exception("MEXC_API_KEY and MEXC_SECRET_KEY are required in .env")
 
         # Store get_env for use in instance methods
         self._get_env = get_env

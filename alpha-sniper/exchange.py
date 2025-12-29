@@ -1196,15 +1196,7 @@ class DataOnlyMexcExchange(BaseExchange):
 
 def create_exchange(config, logger):
     """
-    Factory to create appropriate exchange based on SIM_MODE and SIM_DATA_SOURCE
+    Factory to create RealExchange for LIVE trading only.
     """
-    if config.sim_mode:
-        if config.sim_data_source == "LIVE_DATA":
-            logger.info("📡 SIM_MODE=True | SIM_DATA_SOURCE=LIVE_DATA | Using DataOnlyMexcExchange (REAL MEXC market data, PAPER ONLY)")
-            return DataOnlyMexcExchange(config, logger)
-        else:
-            logger.info("📡 SIM_MODE=True | SIM_DATA_SOURCE=FAKE | Using SimulatedExchange (synthetic data)")
-            return SimulatedExchange(config, logger)
-    else:
-        logger.info("📡 SIM_MODE=False | Using RealExchange (LIVE trading)")
-        return RealExchange(config, logger)
+    logger.info("📡 LIVE MODE | Using RealExchange (LIVE trading with real money)")
+    return RealExchange(config, logger)

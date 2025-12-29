@@ -247,8 +247,8 @@ class RiskEngine:
         old_equity = self.current_equity
         self.current_equity = new_equity
 
-        # First sync in LIVE mode: set session_start_equity
-        if self.session_start_equity is None and not self.config.sim_mode:
+        # First sync: set session_start_equity
+        if self.session_start_equity is None:
             self.session_start_equity = new_equity
             self.logger.info(f"💰 Session equity baseline set from MEXC: ${self.session_start_equity:.2f}")
 
@@ -595,10 +595,9 @@ class RiskEngine:
                         )
                     else:
                         # Fallback to simple notification
-                        mode = "SIM" if self.config.sim_mode else "LIVE"
                         self.telegram.send(
                             f"⛔ DAILY LOSS LIMIT HIT\n"
-                            f"Mode: {mode}\n"
+                            f"Mode: LIVE\n"
                             f"Loss today: ${self.daily_pnl:.2f} ({daily_loss_pct*100:.2f}%)\n"
                             f"Limit: {self.config.max_daily_loss_pct*100:.1f}%\n"
                             f"No new trades will be opened until next daily reset."
@@ -752,24 +751,12 @@ class RiskEngine:
         hold_time_sec = time.time() - position['timestamp_open']
         hold_time_hours = hold_time_sec / 3600
 
-        # Detailed SIM logging
-        if self.config.sim_mode:
-            self.logger.info(
-                f"🔴 [SIM-CLOSE] {position['symbol']} {position['side']} | "
-                f"exit={exit_price:.6f} | "
-                f"pnl_usd=${pnl_usd:.2f} | "
-                f"pnl_pct={pnl_pct:.2f}% | "
-                f"risk_usd=${initial_risk_usd:.2f} | "
-                f"R={r_multiple:.2f}R | "
-                f"hold={hold_time_hours:.1f}h | "
-                f"reason={reason}"
-            )
-        else:
-            self.logger.info(
-                f"🔴 Position closed | {position['symbol']} {position['side']} | "
-                f"PnL: ${pnl_usd:.2f} ({pnl_pct:.2f}%) | R: {r_multiple:.2f}R | "
-                f"Hold: {hold_time_hours:.1f}h | Reason: {reason}"
-            )
+        # Log position close
+        self.logger.info(
+            f"🔴 Position closed | {position['symbol']} {position['side']} | "
+            f"PnL: ${pnl_usd:.2f} ({pnl_pct:.2f}%) | R: {r_multiple:.2f}R | "
+            f"Hold: {hold_time_hours:.1f}h | Reason: {reason}"
+        )
 
         # Send enhanced Telegram notification for ALL trade closes
         try:
@@ -797,9 +784,8 @@ class RiskEngine:
                 self.logger.info(f"[TELEGRAM] Sent enhanced trade close notification for {position['symbol']}")
             else:
                 # Fallback to simple notification
-                mode = "SIM" if self.config.sim_mode else "LIVE"
                 telegram_msg = (
-                    f"🔴 [{mode}] TRADE CLOSED\n"
+                    f"🔴 [LIVE] TRADE CLOSED\n"
                     f"Symbol: {position['symbol']}\n"
                     f"Side: {position['side']}\n"
                     f"Engine: {position.get('engine', 'unknown')}\n"
@@ -851,7 +837,6 @@ class RiskEngine:
         """
         current_time = time.time()
         if current_time >= self.daily_reset_time:
-            mode = "SIM" if self.config.sim_mode else "LIVE"
             self.logger.info(f"🌅 Daily reset | PnL today: ${self.daily_pnl:.2f}")
 
             # Send enhanced daily summary if configured
