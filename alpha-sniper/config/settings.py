@@ -55,6 +55,16 @@ class Settings(BaseSettings):
     MAX_CONCURRENT_POSITIONS: int = Field(default=5, ge=1, le=20, description="Max concurrent positions")
     RISK_PER_TRADE: float = Field(default=0.0025, ge=0.0001, le=0.05, description="Risk per trade")
 
+    # === LIVE TEST MODE ===
+    LIVE_TEST_MODE: bool = Field(default=True, description="Enable live test mode with restricted trading")
+    LIVE_TEST_MAX_ORDERS_PER_DAY: int = Field(default=3, ge=1, description="Max orders per day in test mode")
+    LIVE_TEST_MAX_USD_PER_ORDER: float = Field(default=7.50, ge=1.0, description="Max USD per order in test mode")
+
+    # === CIRCUIT BREAKERS & KILL-SWITCHES ===
+    DAILY_LOSS_CAP_PCT: float = Field(default=-0.02, le=0.0, description="Daily loss cap (-2% equity)")
+    STREAK_BREAKER_LOSSES: int = Field(default=3, ge=2, description="Consecutive losses to trigger pause")
+    STREAK_BREAKER_COOLDOWN_MIN: int = Field(default=60, ge=10, description="Cooldown minutes after streak breaker")
+
     # === PUMP ENGINE SETTINGS ===
     PUMP_ONLY_MODE: bool = Field(default=True, description="Only trade pump signals")
     PUMP_MAX_AGE_HOURS: int = Field(default=129, ge=1, description="Max age for pump signals (hours)")

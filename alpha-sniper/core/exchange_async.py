@@ -326,6 +326,223 @@ class AsyncExchange:
             f"fetch_open_orders({symbol or 'all'})",
         )
 
+    async def fetch_orders(
+        self,
+        symbol: Optional[str] = None,
+        since: Optional[int] = None,
+        limit: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch order history.
+
+        Args:
+            symbol: Trading pair (None = all pairs)
+            since: Start timestamp in ms
+            limit: Max number of orders
+
+        Returns:
+            List of orders
+        """
+        return await self._retry(
+            lambda: self.client.fetch_orders(symbol, since, limit),
+            f"fetch_orders({symbol or 'all'})",
+        )
+
+    def market(self, symbol: str) -> Dict[str, Any]:
+        """
+        Get market metadata for a symbol (synchronous).
+
+        Args:
+            symbol: Trading pair
+
+        Returns:
+            Market dict with limits, precision, etc.
+        """
+        return self.client.market(symbol)
+
+    def quantize_amount_price(
+        self, symbol: str, amount: float, price: float
+    ) -> tuple[float, float]:
+        """
+        Quantize amount and price to exchange precision limits.
+
+        Args:
+            symbol: Trading pair
+            amount: Order quantity
+            price: Order price
+
+        Returns:
+            (quantized_amount, quantized_price)
+        """
+        m = self.market(symbol)
+        prec = m.get('precision', {})
+
+        # Round to exchange precision
+        amt = (
+            round(amount, prec.get('amount', 8))
+            if prec.get('amount') is not None
+            else amount
+        )
+        prc = (
+            round(price, prec.get('price', 8))
+            if prec.get('price') is not None
+            else price
+        )
+
+        # Enforce minimum amounts if present
+        limits = m.get('limits', {})
+        amt_min = (limits.get('amount') or {}).get('min')
+        if amt_min and amt < amt_min:
+            amt = amt_min
+
+        return amt, prc
+
+    async def validate_order(
+        self, symbol: str, size_usd: float, price: float
+    ) -> tuple[bool, str, Dict[str, Any]]:
+        """
+        Validate order against exchange limits before submission.
+
+        Args:
+            symbol: Trading pair
+            size_usd: Order size in USD
+            price: Entry price
+
+        Returns:
+            (is_valid, reason, details_dict)
+        """
+        m = self.market(symbol)
+        amount = size_usd / max(price, 1e-12)
+        amount, price = self.quantize_amount_price(symbol, amount, price)
+
+        limits = m.get('limits', {})
+        min_notional = (limits.get('cost') or {}).get('min')
+        min_amount = (limits.get('amount') or {}).get('min')
+
+        if min_amount and amount < min_amount:
+            return (
+                False,
+                f"amount<{min_amount}",
+                {"amount": amount, "price": price, "symbol": symbol},
+            )
+
+        if min_notional and amount * price < min_notional:
+            return (
+                False,
+                f"notional<{min_notional}",
+                {"amount": amount, "price": price, "symbol": symbol, "notional": amount * price},
+            )
+
+        return True, "OK", {"amount": amount, "price": price, "symbol": symbol}
+
+    async def get_liquidity_metrics(
+        self, symbol: str, required_usd: float, max_levels: int = 20
+    ) -> Dict[str, Any]:
+        """
+        Calculate liquidity metrics from order book.
+
+        Args:
+            symbol: Trading pair
+            required_usd: Required order size in USD
+            max_levels: Order book depth to fetch
+
+        Returns:
+            Dict with spread_pct and depth_usd
+        """
+        ob = await self.fetch_order_book(symbol, limit=max_levels)
+        bids = ob.get('bids') or []
+        asks = ob.get('asks') or []
+
+        if not bids or not asks:
+            return {"spread_pct": 999.0, "depth_usd": 0.0}
+
+        best_bid, best_ask = bids[0][0], asks[0][0]
+        mid = (best_bid + best_ask) / 2.0
+        spread_pct = (best_ask - best_bid) / mid * 100.0
+
+        # Calculate depth on the taking side (buying consumes asks)
+        needed = required_usd
+        depth_usd = 0.0
+
+        for p, q in asks:
+            take = min(needed, p * q)
+            depth_usd += take
+            needed -= take
+            if needed <= 0:
+                break
+
+        return {"spread_pct": spread_pct, "depth_usd": depth_usd}
+
+    async def create_order_idempotent(
+        self,
+        symbol: str,
+        side: str,
+        order_type: str,
+        amount: float,
+        price: Optional[float] = None,
+        client_oid: Optional[str] = None,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Create an order with idempotency via clientOrderId.
+
+        If order creation fails, attempts to find the order by clientOrderId
+        to prevent duplicate submissions.
+
+        Args:
+            symbol: Trading pair
+            side: 'buy' or 'sell'
+            order_type: 'market' or 'limit'
+            amount: Order quantity
+            price: Limit price (required for limit orders)
+            client_oid: Client-side order ID for idempotency
+            params: Additional exchange-specific params
+
+        Returns:
+            Order dict with id, status, filled, etc.
+        """
+        params = dict(params or {})
+
+        if client_oid:
+            # Common key for idempotency; may fall back into info for some venues
+            params.setdefault('clientOrderId', client_oid)
+
+        try:
+            if order_type == 'market':
+                return await self._retry(
+                    lambda: self.client.create_order(
+                        symbol, order_type, side, amount, None, params
+                    ),
+                    f"create_order_idempotent({symbol}, {side}, {amount})",
+                )
+            else:
+                return await self._retry(
+                    lambda: self.client.create_order(
+                        symbol, order_type, side, amount, price, params
+                    ),
+                    f"create_order_idempotent({symbol}, {side}, {amount})",
+                )
+        except Exception as e:
+            # Best-effort: try to find by client OID if exchange supports it
+            if client_oid:
+                try:
+                    orders = await self.fetch_orders(symbol)
+                    for o in orders or []:
+                        info = o.get('info') or {}
+                        if (o.get('clientOrderId') == client_oid) or (
+                            info.get('clientOrderId') == client_oid
+                        ):
+                            logger.warning(
+                                f"Order with clientOrderId={client_oid} already exists, returning existing order"
+                            )
+                            return o
+                except Exception as lookup_error:
+                    logger.warning(
+                        f"Failed to lookup existing order by clientOrderId: {lookup_error}"
+                    )
+            # Re-raise original exception if we couldn't find the order
+            raise e
+
     async def close(self):
         """
         Close exchange connection and cleanup resources.
