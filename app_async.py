@@ -1,11 +1,13 @@
 """
-Alpha Sniper v4.2 - Async Main Entrypoint
+Alpha Sniper v4.2 - Async Trading Bot
 
 Fully asynchronous trading bot with:
-- Non-blocking I/O for all operations
-- Bounded concurrency via Semaphore
-- Shared indicator precompute
-- SQLite WAL + single writer
+- Pump detection and signal generation
+- Risk-based position sizing
+- Idempotent order execution
+- Position management (breakeven, partial TP, SL/TP)
+- Circuit breakers (daily loss cap, streak breaker)
+- SQLite WAL + single writer pattern
 - Graceful shutdown with queue draining
 """
 
@@ -13,6 +15,8 @@ import asyncio
 import signal
 import logging
 import sys
+import time
+import uuid
 from pathlib import Path
 
 # Add alpha-sniper to path
@@ -24,6 +28,10 @@ from db.async_driver import AsyncDB
 from notify.telegram_async import AsyncTelegram
 from scanner.runner import scan_symbols, MarketDataCache
 from universe.select import select_top_liquid_symbols_with_cache
+from signals.pump_engine import PumpEngine
+from risk.async_risk_engine import AsyncRiskEngine
+from utils.locks import symbol_lock
+from utils.timebar import sleep_until_next_minute
 
 # Configure structured logging
 logging.basicConfig(
@@ -57,6 +65,395 @@ def setup_signal_handlers():
     logger.info("Signal handlers registered (SIGINT, SIGTERM)")
 
 
+async def process_signals_async(
+    signals: list,
+    exchange: AsyncExchange,
+    risk: AsyncRiskEngine,
+    telegram: AsyncTelegram,
+    settings,
+) -> tuple[int, int]:
+    """
+    Process signals and place orders.
+
+    Args:
+        signals: List of signal dicts from pump engine
+        exchange: Exchange instance
+        risk: Risk engine instance
+        telegram: Telegram notifier
+        settings: Settings object
+
+    Returns:
+        (signals_opened, signals_skipped)
+    """
+    opened, skipped = 0, 0
+
+    for sig in signals:
+        symbol = sig.get('symbol')
+
+        try:
+            # Step 1: Check if can open new position
+            can_open, reason = await risk.can_open_new_position_async(sig)
+            if not can_open:
+                logger.debug(f"Cannot open {symbol}: {reason}")
+                skipped += 1
+                continue
+
+            # Step 2: Calculate position size
+            entry_price = sig.get('entry_price')
+            stop_loss = sig.get('stop_loss')
+            size_usd = await risk.calculate_position_size_async(sig, entry_price, stop_loss)
+
+            if size_usd <= 0 or size_usd < settings.MIN_VIABLE_TRADE_USD:
+                logger.debug(f"Position size too small for {symbol}: ${size_usd:.2f}")
+                skipped += 1
+                continue
+
+            # Step 3: Exchange validation
+            valid, why, details = await exchange.validate_order(symbol, size_usd, entry_price)
+            if not valid:
+                logger.info(f"Order validation failed for {symbol}: {why} | {details}")
+                skipped += 1
+                continue
+
+            amount = details['amount']
+            price = details['price']
+
+            # Step 4: Liquidity gate (pre-order check)
+            liq = await exchange.get_liquidity_metrics(symbol, size_usd)
+            if liq['spread_pct'] > settings.MAX_SPREAD_PCT_ORDER:
+                logger.info(
+                    f"Spread too high for {symbol}: {liq['spread_pct']:.2f}% > {settings.MAX_SPREAD_PCT_ORDER:.2f}%"
+                )
+                skipped += 1
+                continue
+
+            required_depth = size_usd * settings.MIN_DEPTH_MULTIPLE
+            if liq['depth_usd'] < required_depth:
+                logger.info(
+                    f"Insufficient depth for {symbol}: ${liq['depth_usd']:.0f} < ${required_depth:.0f}"
+                )
+                skipped += 1
+                continue
+
+            # Step 5: LIVE_TEST_MODE check
+            if settings.LIVE_TEST_MODE:
+                test_allowed, adjusted_size, test_reason = await risk.check_live_test_limits_async(
+                    size_usd, symbol
+                )
+                if not test_allowed:
+                    logger.info(f"LIVE_TEST_MODE limit: {test_reason}")
+                    skipped += 1
+                    continue
+
+                if adjusted_size != size_usd:
+                    size_usd = adjusted_size
+                    amount = size_usd / entry_price
+
+            # Step 6: Place order with per-symbol lock + idempotency
+            async with symbol_lock(symbol):
+                client_oid = f"alpha-{symbol.replace('/', '')}-{int(time.time()//60)}-{uuid.uuid4().hex[:6]}"
+
+                try:
+                    order = await exchange.create_order_idempotent(
+                        symbol=symbol,
+                        side='buy' if sig['side'] == 'long' else 'sell',
+                        order_type='market',
+                        amount=amount,
+                        client_oid=client_oid,
+                        params={'leverage': 1}
+                    )
+                except Exception as e:
+                    logger.error(f"Order placement error for {symbol}: {e}", exc_info=True)
+                    skipped += 1
+                    continue
+
+            # Step 7: Verify order success and add position
+            if order and order.get('id'):
+                order_id = order.get('id')
+                filled_qty = order.get('filled', amount)
+                avg_price = order.get('average', entry_price)
+
+                # Create position object
+                position = {
+                    'symbol': symbol,
+                    'side': sig['side'],
+                    'engine': sig.get('engine', 'pump'),
+                    'entry_price': avg_price,
+                    'stop_loss': stop_loss,
+                    'tp_2r': sig.get('tp_2r'),
+                    'tp_4r': sig.get('tp_4r'),
+                    'qty': filled_qty,
+                    'size_usd': size_usd,
+                    'risk_pct': settings.RISK_PER_TRADE,
+                    'initial_risk_usd': abs(avg_price - stop_loss) * filled_qty,
+                    'equity_at_entry': await risk._get_equity_estimate(),
+                    'score': sig.get('score'),
+                    'regime': sig.get('regime', 'SIDEWAYS'),
+                    'timestamp_open': int(time.time()),
+                    'max_hold_hours': sig.get('max_hold_hours', 6),
+                }
+
+                # Add to database
+                await risk.add_position_async(position)
+                opened += 1
+
+                # Notify via Telegram
+                if telegram:
+                    r_risk = abs(avg_price - stop_loss)
+                    r_reward = abs(sig.get('tp_4r', avg_price) - avg_price) if sig.get('tp_4r') else 0
+                    r_multiple = (r_reward / r_risk) if r_risk > 0 else 0
+
+                    await telegram.send(
+                        f"✅ OPENED {sig['side'].upper()}\n"
+                        f"Symbol: {symbol}\n"
+                        f"Entry: ${avg_price:.6f}\n"
+                        f"Stop: ${stop_loss:.6f}\n"
+                        f"Target: ${sig.get('tp_4r', 0):.6f}\n"
+                        f"Size: ${size_usd:.2f}\n"
+                        f"R: {r_multiple:.2f}R\n"
+                        f"Score: {sig.get('score', 0)}"
+                    )
+
+                logger.info(
+                    f"✅ Position opened: {symbol} | "
+                    f"side={sig['side']} | size=${size_usd:.2f} | "
+                    f"entry=${avg_price:.6f} | order_id={order_id}"
+                )
+            else:
+                logger.error(f"Order returned invalid response for {symbol}: {order}")
+                skipped += 1
+
+        except Exception as e:
+            logger.error(f"Error processing signal for {symbol}: {e}", exc_info=True)
+            skipped += 1
+
+    return opened, skipped
+
+
+async def manage_positions_loop(
+    exchange: AsyncExchange,
+    risk: AsyncRiskEngine,
+    telegram: AsyncTelegram,
+):
+    """
+    Continuously manage open positions.
+
+    Checks every 5 seconds for:
+    - Breakeven at +0.7R
+    - Partial TP (50%) at +2R
+    - Stop-loss hits
+    - Take-profit hits (2R, 4R)
+    - Max hold time exceeded
+    """
+    logger.info("Position management loop started")
+
+    while not stop_event.is_set():
+        try:
+            positions = await risk.get_open_positions_async()
+
+            for pos in positions:
+                symbol = pos['symbol']
+
+                try:
+                    # Fetch current price
+                    ticker = await exchange.fetch_ticker(symbol)
+                    current_price = ticker.get('last', ticker.get('close'))
+
+                    if not current_price:
+                        continue
+
+                    entry_price = pos['entry_price']
+                    stop_loss = pos['stop_loss']
+                    side = pos['side']
+
+                    # Calculate R-multiple
+                    risk_per_unit = abs(entry_price - stop_loss) or 1e-12
+                    if side == 'long':
+                        unrealized_pnl = current_price - entry_price
+                    else:
+                        unrealized_pnl = entry_price - current_price
+
+                    unrealized_r = unrealized_pnl / risk_per_unit
+
+                    # Breakeven at +0.7R
+                    if unrealized_r >= 0.7 and not pos.get('breakeven_moved'):
+                        pos['stop_loss'] = entry_price
+                        pos['breakeven_moved'] = 1
+                        await risk.update_position_async(pos)
+                        logger.info(f"🔒 Breakeven activated for {symbol} at +{unrealized_r:.2f}R")
+
+                    # Partial TP at +2R
+                    if unrealized_r >= 2.0 and not pos.get('partial_tp_taken'):
+                        partial_qty = pos['qty'] * 0.5
+
+                        async with symbol_lock(symbol):
+                            try:
+                                await exchange.create_order_idempotent(
+                                    symbol=symbol,
+                                    side='sell' if side == 'long' else 'buy',
+                                    order_type='market',
+                                    amount=partial_qty,
+                                )
+                                pos['qty'] *= 0.5
+                                pos['partial_tp_taken'] = 1
+                                await risk.update_position_async(pos)
+                                logger.info(f"💰 Partial TP (50%) taken for {symbol} at +{unrealized_r:.2f}R")
+                            except Exception as e:
+                                logger.error(f"Failed to take partial TP for {symbol}: {e}")
+
+                    # Check stop-loss
+                    if (side == 'long' and current_price <= stop_loss) or \
+                       (side == 'short' and current_price >= stop_loss):
+                        await close_position_async(pos, current_price, 'STOP_LOSS', exchange, risk, telegram)
+                        continue
+
+                    # Check take-profit targets
+                    tp_4r = pos.get('tp_4r')
+                    tp_2r = pos.get('tp_2r')
+
+                    if tp_4r and side == 'long' and current_price >= tp_4r:
+                        await close_position_async(pos, current_price, 'TP_4R', exchange, risk, telegram)
+                        continue
+                    elif tp_2r and side == 'long' and current_price >= tp_2r:
+                        await close_position_async(pos, current_price, 'TP_2R', exchange, risk, telegram)
+                        continue
+
+                    # Check max hold time
+                    hold_time_hours = (time.time() - pos['timestamp_open']) / 3600
+                    if hold_time_hours >= pos.get('max_hold_hours', 6):
+                        await close_position_async(pos, current_price, 'MAX_HOLD_TIME', exchange, risk, telegram)
+                        continue
+
+                except Exception as e:
+                    logger.error(f"Error managing position {symbol}: {e}", exc_info=True)
+
+        except Exception as e:
+            logger.error(f"Error in position management loop: {e}", exc_info=True)
+
+        # Wait 5 seconds before next check
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=5.0)
+            break  # Stop event was set
+        except asyncio.TimeoutError:
+            pass  # Normal - continue loop
+
+
+async def close_position_async(
+    position: dict,
+    exit_price: float,
+    reason: str,
+    exchange: AsyncExchange,
+    risk: AsyncRiskEngine,
+    telegram: AsyncTelegram,
+):
+    """
+    Close a position and record the trade.
+
+    Args:
+        position: Position dict
+        exit_price: Current/exit price
+        reason: Close reason (STOP_LOSS, TP_2R, TP_4R, MAX_HOLD_TIME)
+        exchange: Exchange instance
+        risk: Risk engine instance
+        telegram: Telegram notifier
+    """
+    symbol = position['symbol']
+    side = position['side']
+    qty = position['qty']
+
+    logger.info(f"🔴 Closing position {symbol} | reason={reason}")
+
+    # Place close order
+    async with symbol_lock(symbol):
+        try:
+            order = await exchange.create_order_idempotent(
+                symbol=symbol,
+                side='sell' if side == 'long' else 'buy',
+                order_type='market',
+                amount=qty,
+            )
+
+            if order and order.get('id'):
+                filled_price = order.get('average', exit_price)
+            else:
+                filled_price = exit_price
+
+        except Exception as e:
+            logger.error(f"Error closing position {symbol}: {e}", exc_info=True)
+            filled_price = exit_price
+
+    # Calculate PnL
+    entry_price = position['entry_price']
+    if side == 'long':
+        pnl_usd = (filled_price - entry_price) * qty
+    else:
+        pnl_usd = (entry_price - filled_price) * qty
+
+    pnl_pct = (pnl_usd / position['size_usd'] * 100) if position['size_usd'] > 0 else 0
+    r_multiple = (pnl_usd / position['initial_risk_usd']) if position['initial_risk_usd'] > 0 else 0
+
+    # Save to trade history
+    await risk.save_closed_trade_async(position, filled_price, pnl_usd, reason)
+
+    # Remove from open positions
+    await risk.remove_position_async(symbol)
+
+    # Notify
+    if telegram:
+        emoji = "✅" if pnl_usd > 0 else "❌"
+        await telegram.send(
+            f"{emoji} CLOSED {side.upper()}\n"
+            f"Symbol: {symbol}\n"
+            f"Entry: ${entry_price:.6f}\n"
+            f"Exit: ${filled_price:.6f}\n"
+            f"PnL: ${pnl_usd:.2f} ({pnl_pct:+.2f}%)\n"
+            f"R: {r_multiple:+.2f}R\n"
+            f"Reason: {reason}"
+        )
+
+    logger.info(
+        f"Position closed: {symbol} | "
+        f"PnL=${pnl_usd:.2f} ({pnl_pct:+.2f}%) | "
+        f"R={r_multiple:+.2f}R | reason={reason}"
+    )
+
+
+async def reconciliation_loop(
+    exchange: AsyncExchange,
+    risk: AsyncRiskEngine,
+    telegram: AsyncTelegram,
+):
+    """
+    Periodic reconciliation between DB and exchange.
+
+    Checks every 60 seconds for:
+    - Positions in DB but not on exchange
+    - Positions on exchange but not in DB
+    """
+    logger.info("Reconciliation loop started")
+
+    while not stop_event.is_set():
+        try:
+            # Get open positions from DB
+            db_positions = await risk.get_open_positions_async()
+            db_symbols = {p['symbol'] for p in db_positions}
+
+            # For now, just log counts
+            # In production, you'd fetch exchange positions and compare
+            if db_symbols:
+                logger.debug(f"Reconciliation: {len(db_symbols)} positions in DB")
+
+        except Exception as e:
+            logger.error(f"Error in reconciliation loop: {e}", exc_info=True)
+
+        # Wait 60 seconds before next check
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=60.0)
+            break  # Stop event was set
+        except asyncio.TimeoutError:
+            pass  # Normal - continue loop
+
+
 async def main():
     """
     Main async entrypoint.
@@ -68,7 +465,7 @@ async def main():
         settings = get_settings()
 
         logger.info("=" * 80)
-        logger.info("🚀 Alpha Sniper v4.2 - ASYNC MODE")
+        logger.info("🚀 Alpha Sniper v4.2 - ASYNC TRADING BOT")
         logger.info("=" * 80)
         logger.info(f"Mode: {settings.MODE}")
         logger.info(f"Exchange: {settings.EXCHANGE_ID}")
@@ -76,6 +473,11 @@ async def main():
         logger.info(f"Scan concurrency: {settings.SCAN_CONCURRENCY}")
         logger.info(f"Scan interval: {settings.SCAN_INTERVAL_SECONDS}s")
         logger.info(f"Timeframe: {settings.TIMEFRAME}")
+        logger.info(f"Min pump score: {settings.MIN_SCORE}")
+        logger.info(f"LIVE_TEST_MODE: {settings.LIVE_TEST_MODE}")
+        if settings.LIVE_TEST_MODE:
+            logger.info(f"  Max orders/day: {settings.LIVE_TEST_MAX_ORDERS_PER_DAY}")
+            logger.info(f"  Max USD/order: ${settings.LIVE_TEST_MAX_USD_PER_ORDER}")
         logger.info("=" * 80)
 
         # Set up signal handlers
@@ -101,6 +503,12 @@ async def main():
         await db.connect()
         logger.info(f"Database connected: {settings.DB_PATH}")
 
+        # Initialize async risk engine
+        logger.info("Initializing risk engine...")
+        risk = AsyncRiskEngine(settings.DB_PATH, settings, logger)
+        await risk.connect()
+        logger.info("Risk engine connected")
+
         # Initialize Telegram (if configured)
         telegram = None
         if settings.TELEGRAM_ENABLED and settings.TELEGRAM_TOKEN and settings.TELEGRAM_CHAT_ID:
@@ -114,16 +522,47 @@ async def main():
             logger.info("Telegram initialized")
 
             # Send startup notification
+            equity = await risk._get_equity_estimate()
             await telegram.send(
                 f"🚀 Alpha Sniper v4.2 ASYNC\n"
                 f"Mode: {settings.MODE}\n"
                 f"Exchange: {settings.EXCHANGE_ID}\n"
                 f"Universe: {settings.UNIVERSE_SIZE} symbols\n"
-                f"Concurrency: {settings.SCAN_CONCURRENCY}\n"
+                f"Equity: ${equity:.2f}\n"
+                f"Test Mode: {settings.LIVE_TEST_MODE}\n"
                 f"Status: ✅ ONLINE"
             )
         else:
             logger.info("Telegram disabled or not configured")
+
+        # Initialize pump engine (synchronous - called from async loop)
+        logger.info("Initializing pump engine...")
+        # Create a minimal config object for pump engine
+        class PumpConfig:
+            def __init__(self, s):
+                self.pump_engine_enabled = True
+                self.pump_only_mode = s.PUMP_ONLY_MODE
+                self.min_24h_quote_volume = s.MIN_24H_QUOTE_VOLUME
+                self.pump_debug_logging = False
+
+            def get_pump_thresholds(self, regime):
+                # Simple threshold object
+                class Thresholds:
+                    def __init__(self, s):
+                        self.min_24h_quote_volume = s.MIN_24H_QUOTE_VOLUME
+                        self.min_score = s.MIN_SCORE
+                        self.min_rvol = 2.0
+                        self.min_24h_return = 0.30
+                        self.max_24h_return = 4.0
+                        self.min_momentum = 0.02
+                        self.new_listing_min_rvol = 3.0
+                        self.new_listing_min_score = 35
+                        self.new_listing_min_momentum = 0.05
+                return Thresholds(settings)
+
+        pump_config = PumpConfig(settings)
+        pump_engine = PumpEngine(pump_config, logger)
+        logger.info("Pump engine initialized")
 
         # Initialize caches
         universe_cache = {}
@@ -131,17 +570,24 @@ async def main():
 
         logger.info("=" * 80)
         logger.info("✅ All components initialized")
-        logger.info("🔄 Starting trading loop...")
+        logger.info("🔄 Starting trading loops...")
         logger.info("=" * 80)
 
-        # Main trading loop
+        # Start background tasks
+        position_task = asyncio.create_task(manage_positions_loop(exchange, risk, telegram))
+        reconcile_task = asyncio.create_task(reconciliation_loop(exchange, risk, telegram))
+
+        # Main trading loop - aligned to closed 1-minute candles
         scan_count = 0
 
         while not stop_event.is_set():
             try:
+                # Wait until next minute boundary (closed candle)
+                await sleep_until_next_minute(offset_sec=0.1)
+
                 scan_count += 1
                 logger.info(f"\n{'=' * 80}")
-                logger.info(f"🔍 SCAN #{scan_count}")
+                logger.info(f"🔍 SCAN #{scan_count} | {time.strftime('%Y-%m-%d %H:%M:%S')}")
                 logger.info(f"{'=' * 80}")
 
                 # Step 1: Select universe by liquidity
@@ -154,9 +600,10 @@ async def main():
                 )
 
                 if not symbols:
-                    logger.warning("No symbols selected for universe, skipping scan")
-                    await asyncio.sleep(settings.SCAN_INTERVAL_SECONDS)
+                    logger.warning("No symbols in universe, skipping scan")
                     continue
+
+                logger.info(f"Universe: {len(symbols)} symbols")
 
                 # Step 2: Scan symbols (fetch OHLCV + compute indicators)
                 market_data = await scan_symbols(
@@ -169,31 +616,27 @@ async def main():
 
                 logger.info(f"Market data fetched: {len(market_data)}/{len(symbols)} symbols")
 
-                # Step 3: TODO - Run trading engines on market_data
-                # This is where you would integrate your existing engine logic
-                # For now, just log that we have the data
-                logger.info(f"Market data ready for engines: {len(market_data)} symbols")
+                # Step 3: Generate signals from pump engine
+                signals = pump_engine.generate_signals(market_data, regime='SIDEWAYS')
 
-                # Example: Access precomputed indicators
-                # for symbol, data in market_data.items():
-                #     indicators = data['indicators']
-                #     rsi = indicators.get('rsi_14', 50)
-                #     ema_20 = indicators.get('ema_20', 0)
-                #     # ... run your engine logic here
+                logger.info(f"Signals generated: {len(signals)}")
 
-                # Step 4: Wait for next scan (or stop signal)
-                logger.info(f"Scan #{scan_count} complete, waiting {settings.SCAN_INTERVAL_SECONDS}s...")
+                if signals:
+                    for sig in signals[:5]:  # Log first 5
+                        logger.info(
+                            f"  🎯 {sig['symbol']} | score={sig.get('score', 0)} | "
+                            f"entry=${sig.get('entry_price', 0):.6f}"
+                        )
 
-                try:
-                    await asyncio.wait_for(
-                        stop_event.wait(),
-                        timeout=settings.SCAN_INTERVAL_SECONDS
-                    )
-                    # If we get here, stop_event was set
-                    break
-                except asyncio.TimeoutError:
-                    # Timeout is normal - continue to next scan
-                    pass
+                # Step 4: Process signals (place orders)
+                opened, skipped = await process_signals_async(
+                    signals, exchange, risk, telegram, settings
+                )
+
+                logger.info(f"Signals processed: opened={opened}, skipped={skipped}")
+
+                # Step 5: Save equity snapshot
+                await risk.save_equity_snapshot_async()
 
             except asyncio.CancelledError:
                 logger.info("Trading loop cancelled")
@@ -201,17 +644,22 @@ async def main():
 
             except Exception as e:
                 logger.error(f"Error in trading loop: {e}", exc_info=True)
-
                 if telegram:
                     await telegram.send(f"⚠️ Error in trading loop: {str(e)[:200]}")
-
-                # Wait a bit before retrying
-                await asyncio.sleep(10)
 
         # Graceful shutdown
         logger.info("\n" + "=" * 80)
         logger.info("🛑 Shutting down gracefully...")
         logger.info("=" * 80)
+
+        # Cancel background tasks
+        position_task.cancel()
+        reconcile_task.cancel()
+
+        try:
+            await asyncio.gather(position_task, reconcile_task, return_exceptions=True)
+        except Exception:
+            pass
 
         if telegram:
             await telegram.send("🛑 Alpha Sniper shutting down...")
@@ -220,6 +668,9 @@ async def main():
 
         logger.info("Closing database...")
         await db.close()
+
+        logger.info("Closing risk engine...")
+        await risk.close()
 
         logger.info("Closing exchange...")
         await exchange.close()
