@@ -245,6 +245,8 @@ class AsyncRiskEngine:
         try:
             # Fetch real balance from exchange
             balance = await exchange.fetch_balance()
+            self.log.info(f"Balance response keys: {list(balance.keys())}")
+            self.log.info(f"Total balances: {balance.get('total', {})}")
             usdt_total = balance.get('total', {}).get('USDT', 0.0)
 
             # Add unrealized PnL from open positions
@@ -272,7 +274,7 @@ class AsyncRiskEngine:
                     self.log.warning(f"Failed to calculate unrealized PnL for {symbol}: {e}")
 
             total_equity = float(usdt_total) + unrealized_pnl
-            self.log.debug(f"Real equity: USDT={usdt_total:.2f}, unrealized={unrealized_pnl:.2f}, total={total_equity:.2f}")
+            self.log.info(f"Real equity: USDT={usdt_total:.2f}, unrealized={unrealized_pnl:.2f}, total={total_equity:.2f}")
 
             return total_equity
 
