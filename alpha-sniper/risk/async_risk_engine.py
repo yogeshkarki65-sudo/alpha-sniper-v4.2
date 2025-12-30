@@ -121,7 +121,7 @@ class AsyncRiskEngine:
     # === RISK DECISIONS ===
 
     async def can_open_new_position_async(
-        self, sig: Dict[str, Any]
+        self, sig: Dict[str, Any], exchange=None
     ) -> Tuple[bool, str]:
         """
         Check if a new position can be opened.
@@ -134,6 +134,7 @@ class AsyncRiskEngine:
 
         Args:
             sig: Signal dict with symbol, side, etc.
+            exchange: Optional AsyncExchange instance for real equity
 
         Returns:
             (can_open, reason)
@@ -155,7 +156,7 @@ class AsyncRiskEngine:
             return False, f"MAX_CONCURRENT_POSITIONS_{max_pos}"
 
         # Daily loss cap check
-        equity = await self._get_equity_estimate()
+        equity = await self.get_real_equity_async(exchange) if exchange else await self._get_equity_estimate()
         daily_loss_cap_pct = getattr(self.settings, 'DAILY_LOSS_CAP_PCT', -0.02)
         daily_pnl = await self._get_daily_pnl()
 
@@ -175,7 +176,7 @@ class AsyncRiskEngine:
         return True, "OK"
 
     async def calculate_position_size_async(
-        self, sig: Dict[str, Any], entry: float, stop: float
+        self, sig: Dict[str, Any], entry: float, stop: float, exchange=None
     ) -> float:
         """
         Calculate position size in USD based on risk parameters.
@@ -186,11 +187,12 @@ class AsyncRiskEngine:
             sig: Signal dict
             entry: Entry price
             stop: Stop-loss price
+            exchange: Optional AsyncExchange instance for real equity
 
         Returns:
             Position size in USD (0 if invalid)
         """
-        equity = await self._get_equity_estimate()
+        equity = await self.get_real_equity_async(exchange) if exchange else await self._get_equity_estimate()
         risk_pct = getattr(self.settings, 'RISK_PER_TRADE', 0.0025)  # 0.25%
         risk_usd = equity * risk_pct
 
@@ -229,6 +231,55 @@ class AsyncRiskEngine:
         base_equity = getattr(self.settings, 'SIM_STARTING_EQUITY', 100.0)
 
         return base_equity + realized_pnl + unrealized_pnl
+
+    async def get_real_equity_async(self, exchange) -> float:
+        """
+        Get real equity from exchange balance + unrealized PnL.
+
+        Args:
+            exchange: AsyncExchange instance to fetch balance from
+
+        Returns:
+            Current equity in USD (USDT balance from exchange)
+        """
+        try:
+            # Fetch real balance from exchange
+            balance = await exchange.fetch_balance()
+            usdt_total = balance.get('total', {}).get('USDT', 0.0)
+
+            # Add unrealized PnL from open positions
+            positions = await self.get_open_positions_async()
+            unrealized_pnl = 0.0
+
+            for pos in positions:
+                try:
+                    symbol = pos.get('symbol')
+                    entry = pos.get('entry_price', 0)
+                    qty = pos.get('qty', 0)
+                    side = pos.get('side', 'buy')
+
+                    # Fetch current price
+                    ticker = await exchange.fetch_ticker(symbol)
+                    current_price = ticker.get('last', 0)
+
+                    # Calculate unrealized PnL
+                    if side == 'buy':
+                        unrealized_pnl += (current_price - entry) * qty
+                    else:
+                        unrealized_pnl += (entry - current_price) * qty
+
+                except Exception as e:
+                    self.log.warning(f"Failed to calculate unrealized PnL for {symbol}: {e}")
+
+            total_equity = float(usdt_total) + unrealized_pnl
+            self.log.debug(f"Real equity: USDT={usdt_total:.2f}, unrealized={unrealized_pnl:.2f}, total={total_equity:.2f}")
+
+            return total_equity
+
+        except Exception as e:
+            self.log.error(f"Failed to fetch real equity from exchange: {e}")
+            # Fallback to DB-based estimate
+            return await self._get_equity_estimate()
 
     async def _get_daily_pnl(self) -> float:
         """
@@ -359,9 +410,14 @@ class AsyncRiskEngine:
             f"Reason: {reason}"
         )
 
-    async def save_equity_snapshot_async(self):
-        """Save current equity snapshot for tracking."""
-        equity = await self._get_equity_estimate()
+    async def save_equity_snapshot_async(self, exchange=None):
+        """
+        Save current equity snapshot for tracking.
+
+        Args:
+            exchange: Optional AsyncExchange instance for real equity
+        """
+        equity = await self.get_real_equity_async(exchange) if exchange else await self._get_equity_estimate()
         daily_pnl = await self._get_daily_pnl()
 
         cur = await self.conn.execute("SELECT COUNT(1) FROM positions")

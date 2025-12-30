@@ -92,7 +92,7 @@ async def process_signals_async(
 
         try:
             # Step 1: Check if can open new position
-            can_open, reason = await risk.can_open_new_position_async(sig)
+            can_open, reason = await risk.can_open_new_position_async(sig, exchange)
             if not can_open:
                 logger.debug(f"Cannot open {symbol}: {reason}")
                 skipped += 1
@@ -101,7 +101,7 @@ async def process_signals_async(
             # Step 2: Calculate position size
             entry_price = sig.get('entry_price')
             stop_loss = sig.get('stop_loss')
-            size_usd = await risk.calculate_position_size_async(sig, entry_price, stop_loss)
+            size_usd = await risk.calculate_position_size_async(sig, entry_price, stop_loss, exchange)
 
             if size_usd <= 0 or size_usd < settings.MIN_VIABLE_TRADE_USD:
                 logger.debug(f"Position size too small for {symbol}: ${size_usd:.2f}")
@@ -186,7 +186,7 @@ async def process_signals_async(
                     'size_usd': size_usd,
                     'risk_pct': settings.RISK_PER_TRADE,
                     'initial_risk_usd': abs(avg_price - stop_loss) * filled_qty,
-                    'equity_at_entry': await risk._get_equity_estimate(),
+                    'equity_at_entry': await risk.get_real_equity_async(exchange),
                     'score': sig.get('score'),
                     'regime': sig.get('regime', 'SIDEWAYS'),
                     'timestamp_open': int(time.time()),
@@ -522,7 +522,7 @@ async def main():
             logger.info("Telegram initialized")
 
             # Send startup notification
-            equity = await risk._get_equity_estimate()
+            equity = await risk.get_real_equity_async(exchange)
             await telegram.send(
                 f"🚀 Alpha Sniper v4.2 ASYNC\n"
                 f"Mode: {settings.MODE}\n"
@@ -636,7 +636,7 @@ async def main():
                 logger.info(f"Signals processed: opened={opened}, skipped={skipped}")
 
                 # Step 5: Save equity snapshot
-                await risk.save_equity_snapshot_async()
+                await risk.save_equity_snapshot_async(exchange)
 
             except asyncio.CancelledError:
                 logger.info("Trading loop cancelled")
