@@ -26,13 +26,14 @@ def test_promote_extends_deadline():
     )
 
     # Create winning position at +3R
+    now = int(time.time())
     position = {
         'symbol': 'BTC/USDT',
         'entry_price': 100.0,
         'stop_loss': 99.0,
         'side': 'long',
-        'timestamp_open': int(time.time()),
-        'deadline_ts': int(time.time()) + 300,  # 5 min deadline
+        'timestamp_open': now - 60,  # 1 minute ago to avoid demote
+        'deadline_ts': now + 300,  # 5 min deadline
         'promoted_count': 0,
     }
 
@@ -42,14 +43,15 @@ def test_promote_extends_deadline():
     result = should_promote(position, current_price, None, mock_settings)
     assert result, "Should promote position at +3R"
 
-    # Test full update
+    # Test full update (make a copy to compare)
+    original_deadline = position['deadline_ts']
     updated_pos, action = update_position_with_hold_brain(
-        position, current_price, None, mock_settings
+        position.copy(), current_price, None, mock_settings
     )
 
-    assert action == "PROMOTED", "Action should be PROMOTED"
+    assert action == "PROMOTED", f"Action should be PROMOTED, got {action}"
     assert updated_pos['promoted_count'] == 1, "Promoted count should increment"
-    assert updated_pos['deadline_ts'] > position['deadline_ts'], "Deadline should be extended"
+    assert updated_pos['deadline_ts'] > original_deadline, f"Deadline {updated_pos['deadline_ts']} should be > {original_deadline}"
 
     print("✅ Test passed: Winning positions get promoted")
 
