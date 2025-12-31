@@ -171,8 +171,12 @@ async def sell_all_to_usdt(dry_run=True):
                 result = await exchange.create_market_sell_order(symbol, amount)
 
                 filled = result.get('filled', amount)
-                cost = result.get('cost', 0)  # USDT received
-                avg_price = result.get('average', order['price'])
+                cost = result.get('cost') or 0.0  # USDT received
+                avg_price = result.get('average') or order['price']
+
+                # Calculate cost if not provided
+                if cost == 0.0 and filled > 0:
+                    cost = filled * avg_price
 
                 total_usdt_received += cost
                 successful += 1
