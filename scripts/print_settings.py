@@ -7,11 +7,12 @@ Usage: python scripts/print_settings.py | tee /tmp/alpha_settings.json
 import json
 import sys
 import os
+from pathlib import Path
 
-# Add parent directory to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+# Add alpha-sniper to path (same as app_async.py)
+sys.path.insert(0, str(Path(__file__).parent.parent / "alpha-sniper"))
 
-from alpha_sniper.config.settings import Settings
+from config.settings import get_settings
 
 def mask_secret(key: str, value: any) -> any:
     """Mask sensitive fields."""
@@ -34,12 +35,18 @@ def mask_secret(key: str, value: any) -> any:
 def main():
     try:
         # Load settings
-        settings = Settings()
+        settings = get_settings()
 
         # Convert to dict
         settings_dict = {}
-        for field_name in settings.model_fields.keys():
+        for field_name in dir(settings):
+            # Skip private/magic attributes
+            if field_name.startswith('_'):
+                continue
+            # Skip methods
             value = getattr(settings, field_name)
+            if callable(value):
+                continue
             masked_value = mask_secret(field_name, value)
             settings_dict[field_name] = masked_value
 

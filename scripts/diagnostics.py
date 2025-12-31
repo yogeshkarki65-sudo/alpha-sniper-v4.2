@@ -11,14 +11,15 @@ import sys
 import os
 import time
 from typing import Dict, Any
+from pathlib import Path
 
-# Add parent directory to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+# Add alpha-sniper to path (same as app_async.py)
+sys.path.insert(0, str(Path(__file__).parent.parent / "alpha-sniper"))
 
-from alpha_sniper.config.settings import Settings
-from alpha_sniper.core.exchange_async import ExchangeAsync
-from alpha_sniper.risk.async_risk_engine import AsyncRiskEngine
-from alpha_sniper.signals.pump_engine import PumpEngine
+from config.settings import get_settings, Settings
+from core.exchange_async import AsyncExchange
+from risk.async_risk_engine import AsyncRiskEngine
+from signals.pump_engine import PumpEngine
 
 async def check_exchange(settings: Settings) -> Dict[str, Any]:
     """Test exchange connection and fetch capabilities."""
@@ -29,12 +30,12 @@ async def check_exchange(settings: Settings) -> Dict[str, Any]:
     }
 
     try:
-        exchange = ExchangeAsync(settings)
+        exchange = AsyncExchange(settings)
         await exchange.initialize()
 
         # Check balance
         balance = await exchange.fetch_balance()
-        quote_balance = balance.get('free', {}).get(settings.QUOTE_CURRENCY, 0.0)
+        quote_balance = balance.get('free', {}).get(settings.UNIVERSE_BASE_QUOTE, 0.0)
 
         # Check markets
         markets = await exchange.fetch_markets()
@@ -45,7 +46,7 @@ async def check_exchange(settings: Settings) -> Dict[str, Any]:
 
         result["status"] = "ok"
         result["details"] = {
-            "quote_currency": settings.QUOTE_CURRENCY,
+            "quote_currency": settings.UNIVERSE_BASE_QUOTE,
             "quote_balance": quote_balance,
             "total_markets": len(markets),
             "usdt_pairs": len(usdt_pairs),
@@ -119,7 +120,7 @@ async def check_telegram(settings: Settings, send_test: bool = False) -> Dict[st
     }
 
     try:
-        if not settings.TELEGRAM_ENABLE:
+        if not settings.TELEGRAM_ENABLED:
             result["status"] = "disabled"
             result["details"]["message"] = "Telegram notifications disabled in settings"
             return result
@@ -132,7 +133,7 @@ async def check_telegram(settings: Settings, send_test: bool = False) -> Dict[st
             result["error"] = "aiogram not installed"
             return result
 
-        bot = Bot(token=settings.TELEGRAM_BOT_TOKEN)
+        bot = Bot(token=settings.TELEGRAM_TOKEN)
 
         # Get bot info
         bot_info = await bot.get_me()
@@ -168,7 +169,7 @@ async def check_pump_detector(settings: Settings) -> Dict[str, Any]:
     }
 
     try:
-        exchange = ExchangeAsync(settings)
+        exchange = AsyncExchange(settings)
         await exchange.initialize()
 
         pump_engine = PumpEngine(settings)
@@ -270,7 +271,7 @@ async def main():
 
     try:
         # Load settings
-        settings = Settings()
+        settings = get_settings()
 
         # Run checks
         print("📡 Checking exchange connection...", file=sys.stderr)
