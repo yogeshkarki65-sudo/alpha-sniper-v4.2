@@ -204,8 +204,11 @@ async def test_cooldown_prevents_reentry():
     # Clean up
     import os
     os.unlink(db_path)
-    os.unlink(db_path + "-wal")
-    os.unlink(db_path + "-shm")
+    # WAL and SHM files may not exist
+    for ext in ["-wal", "-shm"]:
+        wal_file = db_path + ext
+        if os.path.exists(wal_file):
+            os.unlink(wal_file)
 
     print("✅ Test passed: Cooldown prevents immediate re-entry")
 
