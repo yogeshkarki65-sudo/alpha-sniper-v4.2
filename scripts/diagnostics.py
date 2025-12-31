@@ -237,9 +237,10 @@ def check_rate_budget(settings: Settings, exchange_result: Dict[str, Any]) -> Di
         requests_per_min = 60000 / rate_limit_ms if rate_limit_ms > 0 else 60
 
         # Estimate bot usage
-        # Assume: 1 scan/10s * (fetch_markets + N * fetch_ohlcv + N/10 * liquidity checks)
-        scans_per_min = 6  # 60s / 10s
-        symbols_per_scan = settings.MAX_CONCURRENT_POSITIONS * 3  # Scan 3x position limit
+        # Assume: 1 scan per SCAN_INTERVAL_SECONDS * (fetch_markets + N * fetch_ohlcv + N/10 * liquidity checks)
+        scan_interval_sec = getattr(settings, 'SCAN_INTERVAL_SECONDS', 300)
+        scans_per_min = 60 / scan_interval_sec if scan_interval_sec > 0 else 0.2  # How many scans per minute
+        symbols_per_scan = getattr(settings, 'UNIVERSE_SIZE', 80)  # Scan all symbols in universe
         requests_per_scan = 1 + symbols_per_scan + (symbols_per_scan / 10)  # markets + ohlcv + liq
         estimated_usage = scans_per_min * requests_per_scan
 
