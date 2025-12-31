@@ -154,14 +154,24 @@ async def process_signals_async(
                 client_oid = f"alpha-{symbol.replace('/', '')}-{int(time.time()//60)}-{uuid.uuid4().hex[:6]}"
 
                 try:
-                    order = await exchange.create_order_idempotent(
-                        symbol=symbol,
-                        side='buy' if sig['side'] == 'long' else 'sell',
-                        order_type='market',
-                        amount=amount,
-                        client_oid=client_oid,
-                        params={'leverage': 1}
-                    )
+                    # Use aggressive limit IOC for pump/pump_early signals if enabled
+                    if settings.AGGRESSIVE_LIMIT_IOC and sig.get('engine') in ('pump', 'pump_early'):
+                        order = await exchange.create_aggressive_limit_ioc(
+                            symbol=symbol,
+                            side='buy' if sig['side'] == 'long' else 'sell',
+                            size_usd=size_usd,
+                            max_slip_pct=settings.AGG_LIMIT_MAX_SLIP_PCT,
+                            client_oid=client_oid,
+                        )
+                    else:
+                        order = await exchange.create_order_idempotent(
+                            symbol=symbol,
+                            side='buy' if sig['side'] == 'long' else 'sell',
+                            order_type='market',
+                            amount=amount,
+                            client_oid=client_oid,
+                            params={'leverage': 1}
+                        )
                 except Exception as e:
                     logger.error(f"Order placement error for {symbol}: {e}", exc_info=True)
                     skipped += 1

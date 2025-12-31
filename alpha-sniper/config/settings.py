@@ -71,6 +71,24 @@ class Settings(BaseSettings):
     MIN_SCORE: int = Field(default=28, ge=0, le=100, description="Min pump score")
     MIN_24H_QUOTE_VOLUME: float = Field(default=47000.0, ge=0, description="Min 24h quote volume")
 
+    # === EARLY PUMP DETECTION (5-minute momentum) ===
+    EARLY_ENABLE: bool = Field(default=True, description="Enable early pump detection (5-min momentum)")
+    EARLY_RET_5M_MIN: float = Field(default=0.03, ge=0.01, description="+3% in last ~5 closed 1m candles")
+    EARLY_VOL_SPIKE_MIN: float = Field(default=3.0, ge=1.0, description="Last 1m volume vs 20-candle avg")
+    EARLY_ACCEL_REQUIRED: bool = Field(default=True, description="Require last close > previous close")
+    EARLY_REQUIRE_SCORE: bool = Field(default=False, description="Also require PUMP_SCORE_MIN")
+    EARLY_REQUIRE_BULL: bool = Field(default=False, description="Only in BULL regime")
+
+    # === AGGRESSIVE LIMIT-IOC ROUTING (reduces slippage) ===
+    AGGRESSIVE_LIMIT_IOC: bool = Field(default=True, description="Use limit IOC orders instead of market")
+    AGG_LIMIT_MAX_SLIP_PCT: float = Field(default=0.0015, ge=0.0001, description="Max slippage 0.15%")
+
+    # === QUICK-EXIT PROFILE FOR PUMPS ===
+    QUICK_EXIT_ENABLE: bool = Field(default=True, description="Enable quick exits for early pumps")
+    QUICK_TP_PCT: float = Field(default=0.02, ge=0.005, description="Take-profit ~2% from entry")
+    QUICK_SL_PCT: float = Field(default=0.01, ge=0.002, description="Stop-loss ~1% from entry")
+    QUICK_MAX_HOLD_MIN: int = Field(default=5, ge=1, description="Max ~5 minutes for early pumps")
+
     # === ORDER VIABILITY (v4.2.3) ===
     MIN_VIABLE_TRADE_USD: float = Field(default=5.0, ge=1.0, description="Min viable trade size USD")
     MAX_SPREAD_PCT_ORDER: float = Field(default=0.30, ge=0.01, description="Max spread % for orders")

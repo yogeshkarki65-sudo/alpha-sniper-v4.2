@@ -543,6 +543,85 @@ class AsyncExchange:
             # Re-raise original exception if we couldn't find the order
             raise e
 
+    async def create_aggressive_limit_ioc(
+        self,
+        symbol: str,
+        side: str,
+        size_usd: float,
+        max_slip_pct: float,
+        client_oid: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Place a limit order with IOC (Immediate-Or-Cancel) to reduce slippage.
+
+        Places limit order slightly beyond best price with max slippage tolerance.
+        Falls back to market order if IOC is unsupported or rejected.
+
+        Args:
+            symbol: Trading pair
+            side: 'buy' or 'sell'
+            size_usd: Desired notional in quote currency
+            max_slip_pct: Max slippage tolerance (e.g., 0.0015 = 0.15%)
+            client_oid: Client order ID for idempotency
+
+        Returns:
+            Order dict
+        """
+        try:
+            # Fetch order book
+            ob = await self.fetch_order_book(symbol, limit=5)
+            bids = ob.get('bids') or []
+            asks = ob.get('asks') or []
+
+            # Fallback to market if book is empty
+            if not bids or not asks:
+                amt = (
+                    size_usd / (asks[0][0] if side == 'buy' and asks else bids[0][0])
+                    if (bids or asks)
+                    else size_usd
+                )
+                return await self.create_order_idempotent(
+                    symbol, side, 'market', amt, client_oid=client_oid
+                )
+
+            best_bid, best_ask = bids[0][0], asks[0][0]
+
+            # Set limit price with slippage tolerance
+            if side == 'buy':
+                px = best_ask * (1 + max_slip_pct)
+            else:
+                px = best_bid * (1 - max_slip_pct)
+
+            # Calculate amount
+            amount = size_usd / max(px, 1e-12)
+
+            # Quantize to exchange precision
+            amount, px = self.quantize_amount_price(symbol, amount, px)
+
+            # Place limit IOC order
+            params = {'timeInForce': 'IOC'}
+            try:
+                return await self.create_order_idempotent(
+                    symbol, side, 'limit', amount, price=px,
+                    client_oid=client_oid, params=params
+                )
+            except Exception:
+                # Fallback to market if IOC unsupported or rejected
+                logger.warning(
+                    f"IOC order failed for {symbol}, falling back to market"
+                )
+                return await self.create_order_idempotent(
+                    symbol, side, 'market', amount, client_oid=client_oid
+                )
+
+        except Exception as e:
+            logger.error(f"Aggressive limit IOC failed for {symbol}: {e}")
+            # Final fallback to market
+            amt = size_usd / (asks[0][0] if side == 'buy' and asks and len(asks) > 0 else 1.0)
+            return await self.create_order_idempotent(
+                symbol, side, 'market', amt, client_oid=client_oid
+            )
+
     async def close(self):
         """
         Close exchange connection and cleanup resources.

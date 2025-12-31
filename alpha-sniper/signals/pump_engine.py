@@ -82,11 +82,114 @@ class PumpEngine:
             }
             debug_rejections = []
 
+        # Early pump detection settings (5-minute momentum)
+        early_enabled = getattr(self.config, 'EARLY_ENABLE', True)
+        early_ret_5m_min = getattr(self.config, 'EARLY_RET_5M_MIN', 0.03)
+        early_vol_spike_min = getattr(self.config, 'EARLY_VOL_SPIKE_MIN', 3.0)
+        early_accel_required = getattr(self.config, 'EARLY_ACCEL_REQUIRED', True)
+        early_require_score = getattr(self.config, 'EARLY_REQUIRE_SCORE', False)
+        early_require_bull = getattr(self.config, 'EARLY_REQUIRE_BULL', False)
+        quick_exit_enabled = getattr(self.config, 'QUICK_EXIT_ENABLE', True)
+        quick_tp_pct = getattr(self.config, 'QUICK_TP_PCT', 0.02)
+        quick_sl_pct = getattr(self.config, 'QUICK_SL_PCT', 0.01)
+        quick_max_hold_min = getattr(self.config, 'QUICK_MAX_HOLD_MIN', 5)
+
         for symbol in valid_symbols:
             try:
+                md = market_data.get(symbol)
+                if not md:
+                    continue
+
+                # Try early pump detection first (5-minute momentum)
+                took_early = False
+                if early_enabled:
+                    df = md.get('df')
+                    if df is not None and len(df) >= 25:
+                        # Get close and volume columns (handle case variations)
+                        close_col = 'close' if 'close' in df.columns else ('c' if 'c' in df.columns else None)
+                        vol_col = 'volume' if 'volume' in df.columns else ('v' if 'v' in df.columns else None)
+
+                        if close_col and vol_col:
+                            close = df[close_col]
+                            vol = df[vol_col]
+
+                            # Calculate 5-minute return (last 6 candles on 1m chart)
+                            c_now = float(close.iloc[-1])
+                            c_5m_ago = float(close.iloc[-6]) if len(close) >= 6 else float(close.iloc[0])
+                            ret_5m = (c_now / c_5m_ago) - 1.0 if c_5m_ago > 0 else 0.0
+
+                            # Calculate volume spike (last candle vs 20-candle avg)
+                            v_last = float(vol.iloc[-1])
+                            v_avg20 = float(vol.iloc[-20:].mean()) if len(vol) >= 20 else float(vol.mean())
+                            vol_spike = (v_last / v_avg20) if v_avg20 > 0 else 0.0
+
+                            # Check acceleration (last close > previous close)
+                            accelerating = float(close.iloc[-1]) > float(close.iloc[-2]) if len(close) >= 2 else False
+
+                            # Check if qualifies
+                            qualifies = (
+                                ret_5m >= early_ret_5m_min
+                                and vol_spike >= early_vol_spike_min
+                                and (accelerating or not early_accel_required)
+                            )
+
+                            if qualifies:
+                                # Additional checks
+                                if early_require_bull and regime != 'BULL':
+                                    qualifies = False
+
+                                if early_require_score:
+                                    indicators = md.get('indicators', {})
+                                    score = indicators.get('score', 0)
+                                    if score < thresholds.min_score:
+                                        qualifies = False
+
+                                if qualifies:
+                                    # Create early pump signal
+                                    entry = c_now
+                                    if quick_exit_enabled:
+                                        sl = entry * (1.0 - quick_sl_pct)
+                                        tp2r = entry + 2.0 * (entry - sl)
+                                        tp4r = entry + 4.0 * (entry - sl)
+                                        max_hold_h = quick_max_hold_min / 60.0
+                                    else:
+                                        sl = entry * 0.98
+                                        tp2r = entry * 1.04
+                                        tp4r = entry * 1.08
+                                        max_hold_h = 4.0 / 60.0
+
+                                    indicators = md.get('indicators', {})
+                                    score = indicators.get('score', 0)
+
+                                    signals.append({
+                                        'symbol': symbol,
+                                        'side': 'long',
+                                        'engine': 'pump_early',
+                                        'entry_price': entry,
+                                        'stop_loss': sl,
+                                        'tp_2r': tp2r,
+                                        'tp_4r': tp4r,
+                                        'score': max(score, 0.0),
+                                        'regime': regime,
+                                        'max_hold_hours': max_hold_h,
+                                    })
+                                    took_early = True
+
+                                    if self.debug_enabled:
+                                        self.logger.info(
+                                            f"[PUMP_DEBUG] EARLY signal: {symbol} | "
+                                            f"ret_5m={ret_5m*100:.2f}% | vol_spike={vol_spike:.2f}x | "
+                                            f"accel={accelerating}"
+                                        )
+
+                # Skip legacy pump check if we took early signal
+                if took_early:
+                    continue
+
+                # Fall back to legacy pump logic
                 result = self._evaluate_symbol(
                     symbol,
-                    market_data.get(symbol),
+                    md,
                     regime,
                     open_positions,
                     thresholds=thresholds,
