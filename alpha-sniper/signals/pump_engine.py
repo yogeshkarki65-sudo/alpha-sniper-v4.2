@@ -126,11 +126,45 @@ class PumpEngine:
                             # Check acceleration (last close > previous close)
                             accelerating = float(close.iloc[-1]) > float(close.iloc[-2]) if len(close) >= 2 else False
 
+                            # Wick filter: Check if 5m move is abnormally large (likely a spike/wick)
+                            wick_filter_enabled = getattr(self.config, 'WICK_FILTER_ENABLE', True)
+                            wick_filter_atr_mult = getattr(self.config, 'WICK_FILTER_ATR_MULT', 2.0)
+                            is_wick = False
+
+                            if wick_filter_enabled and len(df) >= 14:
+                                # Calculate ATR (14-period)
+                                high_col = 'high' if 'high' in df.columns else ('h' if 'h' in df.columns else None)
+                                low_col = 'low' if 'low' in df.columns else ('l' if 'l' in df.columns else None)
+
+                                if high_col and low_col:
+                                    high = df[high_col]
+                                    low = df[low_col]
+
+                                    # True Range = max(high - low, abs(high - prev_close), abs(low - prev_close))
+                                    tr = []
+                                    for i in range(1, len(df)):
+                                        h = float(high.iloc[i])
+                                        l = float(low.iloc[i])
+                                        pc = float(close.iloc[i-1])
+                                        tr.append(max(h - l, abs(h - pc), abs(l - pc)))
+
+                                    # ATR = average of last 14 TR values
+                                    if len(tr) >= 14:
+                                        atr = sum(tr[-14:]) / 14.0
+
+                                        # Calculate 5m price move in absolute terms
+                                        move_5m = abs(c_now - c_5m_ago)
+
+                                        # Reject if move exceeds ATR * multiplier (likely a wick)
+                                        if move_5m > atr * wick_filter_atr_mult:
+                                            is_wick = True
+
                             # Check if qualifies
                             qualifies = (
                                 ret_5m >= early_ret_5m_min
                                 and vol_spike >= early_vol_spike_min
                                 and (accelerating or not early_accel_required)
+                                and not is_wick
                             )
 
                             if qualifies:

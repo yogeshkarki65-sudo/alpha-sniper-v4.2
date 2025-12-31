@@ -447,14 +447,14 @@ class AsyncExchange:
             max_levels: Order book depth to fetch
 
         Returns:
-            Dict with spread_pct and depth_usd
+            Dict with spread_pct, depth_usd, best_bid, best_ask
         """
         ob = await self.fetch_order_book(symbol, limit=max_levels)
         bids = ob.get('bids') or []
         asks = ob.get('asks') or []
 
         if not bids or not asks:
-            return {"spread_pct": 999.0, "depth_usd": 0.0}
+            return {"spread_pct": 999.0, "depth_usd": 0.0, "best_bid": 0.0, "best_ask": 0.0}
 
         best_bid, best_ask = bids[0][0], asks[0][0]
         mid = (best_bid + best_ask) / 2.0
@@ -471,7 +471,12 @@ class AsyncExchange:
             if needed <= 0:
                 break
 
-        return {"spread_pct": spread_pct, "depth_usd": depth_usd}
+        return {
+            "spread_pct": spread_pct,
+            "depth_usd": depth_usd,
+            "best_bid": best_bid,
+            "best_ask": best_ask,
+        }
 
     async def create_order_idempotent(
         self,

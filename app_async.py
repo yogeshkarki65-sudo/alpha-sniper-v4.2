@@ -29,6 +29,7 @@ from notify.telegram_async import AsyncTelegram
 from scanner.runner import scan_symbols, MarketDataCache
 from universe.select import select_top_liquid_symbols_with_cache
 from signals.pump_engine import PumpEngine
+from signals.hold_policy import update_position_with_hold_brain
 from risk.async_risk_engine import AsyncRiskEngine
 from utils.locks import symbol_lock
 from utils.timebar import sleep_until_next_minute
@@ -98,6 +99,13 @@ async def process_signals_async(
                 skipped += 1
                 continue
 
+            # Step 1.1: Check cooldown (Phase 1.1)
+            if settings.COOLDOWN_PER_SYMBOL_SEC > 0:
+                if await risk.is_symbol_on_cooldown(symbol):
+                    logger.debug(f"Symbol {symbol} on cooldown, skipping")
+                    skipped += 1
+                    continue
+
             # Step 2: Calculate position size
             entry_price = sig.get('entry_price')
             stop_loss = sig.get('stop_loss')
@@ -134,6 +142,15 @@ async def process_signals_async(
                 )
                 skipped += 1
                 continue
+
+            # Phase 1.1: Absolute depth floor check
+            if settings.MIN_DEPTH_USD_ABSOLUTE > 0:
+                if liq['depth_usd'] < settings.MIN_DEPTH_USD_ABSOLUTE:
+                    logger.info(
+                        f"Depth below absolute floor for {symbol}: ${liq['depth_usd']:.0f} < ${settings.MIN_DEPTH_USD_ABSOLUTE:.0f}"
+                    )
+                    skipped += 1
+                    continue
 
             # Step 5: LIVE_TEST_MODE check
             if settings.LIVE_TEST_MODE:
@@ -183,7 +200,15 @@ async def process_signals_async(
                 filled_qty = order.get('filled', amount)
                 avg_price = order.get('average', entry_price)
 
+                # Phase 1.1: Track slippage
+                expected_price = liq.get('best_ask', entry_price)  # Best ask for buys
+                await risk.track_order_fill(expected_price, avg_price)
+
                 # Create position object
+                now_ts = int(time.time())
+                max_hold_hours = sig.get('max_hold_hours', 6)
+                deadline_ts = now_ts + int(max_hold_hours * 3600)
+
                 position = {
                     'symbol': symbol,
                     'side': sig['side'],
@@ -199,8 +224,11 @@ async def process_signals_async(
                     'equity_at_entry': await risk.get_real_equity_async(exchange),
                     'score': sig.get('score'),
                     'regime': sig.get('regime', 'SIDEWAYS'),
-                    'timestamp_open': int(time.time()),
-                    'max_hold_hours': sig.get('max_hold_hours', 6),
+                    'timestamp_open': now_ts,
+                    'max_hold_hours': max_hold_hours,
+                    'deadline_ts': deadline_ts,
+                    'peak_price': avg_price,
+                    'promoted_count': 0,
                 }
 
                 # Add to database
@@ -285,6 +313,34 @@ async def manage_positions_loop(
 
                     unrealized_r = unrealized_pnl / risk_per_unit
 
+                    # Dynamic Hold Brain: Promote/Demote/Trailing Stop
+                    # Fetch market data for hold brain analysis (if available)
+                    market_data_for_brain = None
+                    # We'll pass None for now - could fetch OHLCV here if needed for EMA/RVOL checks
+
+                    updated_pos, brain_action = update_position_with_hold_brain(
+                        pos, current_price, market_data_for_brain, settings
+                    )
+
+                    # Handle brain actions
+                    if brain_action == "DEMOTED":
+                        logger.info(f"🧠 Hold brain: DEMOTE {symbol} (flat/negative too long)")
+                        await close_position_async(pos, current_price, 'DEMOTED_BY_BRAIN', exchange, risk, telegram)
+                        continue
+                    elif brain_action == "HARD_CAP":
+                        logger.info(f"🧠 Hold brain: HARD_CAP {symbol} (max {settings.HOLD_BRAIN_MAX_HOLD_HOURS}h)")
+                        await close_position_async(pos, current_price, 'HARD_CAP', exchange, risk, telegram)
+                        continue
+                    elif brain_action == "PROMOTED":
+                        await risk.update_position_async(updated_pos)
+                        logger.info(f"🧠 Hold brain: PROMOTE {symbol} (deadline extended, count={updated_pos.get('promoted_count', 0)})")
+                        pos = updated_pos
+                    elif brain_action == "TRAILING_STOP":
+                        await risk.update_position_async(updated_pos)
+                        logger.info(f"🧠 Hold brain: TRAILING_STOP {symbol} (new stop=${updated_pos['stop_loss']:.6f})")
+                        pos = updated_pos
+                        stop_loss = pos['stop_loss']  # Update for subsequent checks
+
                     # Breakeven at +0.7R
                     if unrealized_r >= 0.7 and not pos.get('breakeven_moved'):
                         pos['stop_loss'] = entry_price
@@ -328,10 +384,11 @@ async def manage_positions_loop(
                         await close_position_async(pos, current_price, 'TP_2R', exchange, risk, telegram)
                         continue
 
-                    # Check max hold time
-                    hold_time_hours = (time.time() - pos['timestamp_open']) / 3600
-                    if hold_time_hours >= pos.get('max_hold_hours', 6):
-                        await close_position_async(pos, current_price, 'MAX_HOLD_TIME', exchange, risk, telegram)
+                    # Check deadline (replaces old max_hold_hours check)
+                    # Note: deadline_ts is now managed by hold brain, which can extend it
+                    deadline_ts = pos.get('deadline_ts')
+                    if deadline_ts and time.time() >= deadline_ts:
+                        await close_position_async(pos, current_price, 'DEADLINE_EXPIRED', exchange, risk, telegram)
                         continue
 
                 except Exception as e:
@@ -346,6 +403,65 @@ async def manage_positions_loop(
             break  # Stop event was set
         except asyncio.TimeoutError:
             pass  # Normal - continue loop
+
+
+async def daily_digest_loop(
+    risk: AsyncRiskEngine,
+    telegram: AsyncTelegram,
+    settings,
+):
+    """
+    Send daily digest at configured hour (UTC).
+
+    Includes:
+    - Daily PnL and trade stats
+    - IOC reject rate
+    - Average slippage
+    - Open positions
+    """
+    logger.info("Daily digest loop started")
+
+    last_digest_date = None
+
+    while not stop_event.is_set():
+        try:
+            import datetime
+            now_utc = datetime.datetime.utcnow()
+            current_date = now_utc.strftime("%Y-%m-%d")
+            current_hour = now_utc.hour
+
+            # Check if it's time to send digest
+            if (
+                settings.DIGEST_ENABLE
+                and current_hour == settings.DIGEST_HOUR_UTC
+                and current_date != last_digest_date
+                and telegram
+            ):
+                # Generate digest
+                digest = await risk.get_daily_digest()
+
+                # Format message
+                msg = (
+                    f"📊 Daily Digest - {digest['date']}\n\n"
+                    f"Trades: {digest['total_trades']} ({digest['winners']}W / {digest['losers']}L)\n"
+                    f"Win Rate: {digest['win_rate']:.1f}%\n"
+                    f"PnL: ${digest['total_pnl']:.2f}\n\n"
+                    f"Orders: {digest['total_fills']}/{digest['total_orders']} filled\n"
+                    f"IOC Rejects: {digest['ioc_rejects']}\n"
+                    f"Avg Slippage: {digest['avg_slippage_bps']:.1f} bps\n\n"
+                    f"Open Positions: {digest['open_positions']}"
+                )
+
+                await telegram.send(msg)
+                logger.info(f"Daily digest sent for {current_date}")
+                last_digest_date = current_date
+
+            # Check every 5 minutes
+            await asyncio.sleep(300)
+
+        except Exception as e:
+            logger.error(f"Error in digest loop: {e}", exc_info=True)
+            await asyncio.sleep(60)
 
 
 async def close_position_async(
@@ -407,6 +523,9 @@ async def close_position_async(
 
     # Remove from open positions
     await risk.remove_position_async(symbol)
+
+    # Phase 1.1: Set cooldown for this symbol
+    await risk.set_symbol_cooldown(symbol)
 
     # Notify
     if telegram:
@@ -586,6 +705,7 @@ async def main():
         # Start background tasks
         position_task = asyncio.create_task(manage_positions_loop(exchange, risk, telegram))
         reconcile_task = asyncio.create_task(reconciliation_loop(exchange, risk, telegram))
+        digest_task = asyncio.create_task(daily_digest_loop(risk, telegram, settings))
 
         # Main trading loop - aligned to closed 1-minute candles
         scan_count = 0

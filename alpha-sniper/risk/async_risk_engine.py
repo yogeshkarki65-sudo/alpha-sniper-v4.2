@@ -78,7 +78,10 @@ class AsyncRiskEngine:
                 timestamp_open INTEGER,
                 max_hold_hours REAL,
                 breakeven_moved INTEGER DEFAULT 0,
-                partial_tp_taken INTEGER DEFAULT 0
+                partial_tp_taken INTEGER DEFAULT 0,
+                deadline_ts INTEGER,
+                peak_price REAL,
+                promoted_count INTEGER DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS trades (
@@ -105,8 +108,24 @@ class AsyncRiskEngine:
                 daily_pnl REAL
             );
 
+            CREATE TABLE IF NOT EXISTS symbol_meta (
+                symbol TEXT PRIMARY KEY,
+                last_exit_ts INTEGER,
+                cooldown_until_ts INTEGER
+            );
+
+            CREATE TABLE IF NOT EXISTS daily_counters (
+                date TEXT PRIMARY KEY,
+                ioc_rejects INTEGER DEFAULT 0,
+                total_orders INTEGER DEFAULT 0,
+                total_fills INTEGER DEFAULT 0,
+                total_slippage_bps REAL DEFAULT 0.0,
+                slippage_samples INTEGER DEFAULT 0
+            );
+
             CREATE INDEX IF NOT EXISTS idx_trades_closed_at ON trades(closed_at);
             CREATE INDEX IF NOT EXISTS idx_equity_timestamp ON equity_snapshots(timestamp);
+            CREATE INDEX IF NOT EXISTS idx_symbol_meta_cooldown ON symbol_meta(cooldown_until_ts);
             """
         )
         await self.conn.commit()
@@ -502,3 +521,153 @@ class AsyncRiskEngine:
         )
         cols = [d[0] for d in cur.description]
         return [dict(zip(cols, row)) for row in await cur.fetchall()]
+
+    # === PHASE 1.1: COOLDOWN MANAGEMENT ===
+
+    async def is_symbol_on_cooldown(self, symbol: str) -> bool:
+        """
+        Check if symbol is on cooldown (recent exit within cooldown window).
+
+        Args:
+            symbol: Trading symbol
+
+        Returns:
+            True if on cooldown, False otherwise
+        """
+        now = int(time.time())
+        cur = await self.conn.execute(
+            "SELECT cooldown_until_ts FROM symbol_meta WHERE symbol=?", (symbol,)
+        )
+        row = await cur.fetchone()
+
+        if not row or not row[0]:
+            return False
+
+        cooldown_until = row[0]
+        return now < cooldown_until
+
+    async def set_symbol_cooldown(self, symbol: str):
+        """
+        Set cooldown timer for symbol after exit.
+
+        Args:
+            symbol: Trading symbol
+        """
+        now = int(time.time())
+        cooldown_sec = getattr(self.settings, 'COOLDOWN_PER_SYMBOL_SEC', 120)
+        cooldown_until = now + cooldown_sec
+
+        await self.conn.execute(
+            """
+            INSERT OR REPLACE INTO symbol_meta (symbol, last_exit_ts, cooldown_until_ts)
+            VALUES (?, ?, ?)
+            """,
+            (symbol, now, cooldown_until),
+        )
+        await self.conn.commit()
+        self.log.info(f"Cooldown set for {symbol} until {cooldown_until} ({cooldown_sec}s)")
+
+    # === PHASE 1.1: COUNTERS & TRACKING ===
+
+    async def increment_ioc_reject(self):
+        """Increment IOC reject counter for today."""
+        if not getattr(self.settings, 'IOC_REJECT_TRACKING', True):
+            return
+
+        today = time.strftime("%Y-%m-%d")
+        await self.conn.execute(
+            """
+            INSERT INTO daily_counters (date, ioc_rejects, total_orders)
+            VALUES (?, 1, 1)
+            ON CONFLICT(date) DO UPDATE SET
+                ioc_rejects = ioc_rejects + 1,
+                total_orders = total_orders + 1
+            """,
+            (today,),
+        )
+        await self.conn.commit()
+
+    async def track_order_fill(self, expected_price: float, fill_price: float):
+        """
+        Track order fill and calculate slippage.
+
+        Args:
+            expected_price: Expected price (orderbook best ask/bid)
+            fill_price: Actual fill price
+        """
+        if not getattr(self.settings, 'SLIPPAGE_TRACKING', True):
+            return
+
+        slippage_bps = abs((fill_price - expected_price) / expected_price) * 10000
+        today = time.strftime("%Y-%m-%d")
+
+        await self.conn.execute(
+            """
+            INSERT INTO daily_counters (date, total_fills, total_slippage_bps, slippage_samples, total_orders)
+            VALUES (?, 1, ?, 1, 1)
+            ON CONFLICT(date) DO UPDATE SET
+                total_fills = total_fills + 1,
+                total_slippage_bps = total_slippage_bps + ?,
+                slippage_samples = slippage_samples + 1,
+                total_orders = total_orders + 1
+            """,
+            (today, slippage_bps, slippage_bps),
+        )
+        await self.conn.commit()
+
+    # === PHASE 1.1: DAILY DIGEST ===
+
+    async def get_daily_digest(self) -> Dict[str, Any]:
+        """
+        Generate daily digest with key metrics.
+
+        Returns:
+            Dict with digest data
+        """
+        today = time.strftime("%Y-%m-%d")
+        today_start = int(time.mktime(time.strptime(today, "%Y-%m-%d")))
+
+        # Get today's trades
+        cur = await self.conn.execute(
+            "SELECT COUNT(*), SUM(pnl_usd), COUNT(CASE WHEN pnl_usd > 0 THEN 1 END) FROM trades WHERE closed_at >= ?",
+            (today_start,),
+        )
+        total_trades, total_pnl, winners = await cur.fetchone()
+        total_trades = total_trades or 0
+        total_pnl = total_pnl or 0.0
+        winners = winners or 0
+        losers = total_trades - winners
+        win_rate = (winners / total_trades * 100) if total_trades > 0 else 0
+
+        # Get counters
+        cur = await self.conn.execute(
+            "SELECT ioc_rejects, total_orders, total_fills, total_slippage_bps, slippage_samples FROM daily_counters WHERE date=?",
+            (today,),
+        )
+        row = await cur.fetchone()
+        if row:
+            ioc_rejects, total_orders, total_fills, total_slippage_bps, slippage_samples = row
+        else:
+            ioc_rejects = total_orders = total_fills = 0
+            total_slippage_bps = slippage_samples = 0
+
+        avg_slippage_bps = (
+            (total_slippage_bps / slippage_samples) if slippage_samples > 0 else 0
+        )
+
+        # Open positions
+        open_positions = await self.get_open_positions_async()
+
+        return {
+            "date": today,
+            "total_trades": total_trades,
+            "winners": winners,
+            "losers": losers,
+            "win_rate": win_rate,
+            "total_pnl": total_pnl,
+            "ioc_rejects": ioc_rejects or 0,
+            "total_orders": total_orders or 0,
+            "total_fills": total_fills or 0,
+            "avg_slippage_bps": avg_slippage_bps,
+            "open_positions": len(open_positions),
+        }

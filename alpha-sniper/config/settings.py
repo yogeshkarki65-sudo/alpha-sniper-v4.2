@@ -89,6 +89,18 @@ class Settings(BaseSettings):
     QUICK_SL_PCT: float = Field(default=0.01, ge=0.002, description="Stop-loss ~1% from entry")
     QUICK_MAX_HOLD_MIN: int = Field(default=5, ge=1, description="Max ~5 minutes for early pumps")
 
+    # === PHASE 1.1: COOLDOWN & WICK FILTER ===
+    COOLDOWN_PER_SYMBOL_SEC: int = Field(default=120, ge=0, description="Per-symbol cooldown (seconds) after exit")
+    WICK_FILTER_ENABLE: bool = Field(default=True, description="Enable wick filter (ATR-based spike rejection)")
+    WICK_FILTER_ATR_MULT: float = Field(default=2.0, ge=0.5, description="ATR multiplier for wick detection")
+    MIN_DEPTH_USD_ABSOLUTE: float = Field(default=25000.0, ge=0, description="Absolute minimum depth floor ($25k)")
+
+    # === PHASE 1.1: DIGEST & TRACKING ===
+    DIGEST_ENABLE: bool = Field(default=True, description="Enable daily Telegram digest")
+    DIGEST_HOUR_UTC: int = Field(default=0, ge=0, le=23, description="Daily digest hour (UTC, 0 = midnight)")
+    IOC_REJECT_TRACKING: bool = Field(default=True, description="Track IOC order rejections")
+    SLIPPAGE_TRACKING: bool = Field(default=True, description="Track slippage on fills")
+
     # === ORDER VIABILITY (v4.2.3) ===
     MIN_VIABLE_TRADE_USD: float = Field(default=5.0, ge=1.0, description="Min viable trade size USD")
     MAX_SPREAD_PCT_ORDER: float = Field(default=0.30, ge=0.01, description="Max spread % for orders")
@@ -98,6 +110,17 @@ class Settings(BaseSettings):
     # === LIQUIDITY GUARD ===
     MIN_LIQ_FACTOR: float = Field(default=0.4, ge=0.1, le=1.0, description="Min liquidity factor")
     MIN_ADJUSTED_USD: float = Field(default=5.0, ge=1.0, description="Min adjusted size USD")
+
+    # === DYNAMIC HOLD BRAIN ===
+    HOLD_BRAIN_ENABLE: bool = Field(default=True, description="Enable dynamic hold policy (promote/demote)")
+    HOLD_BRAIN_PROMOTE_R_MIN: float = Field(default=2.5, ge=1.0, description="Min R-multiple to promote (extend deadline)")
+    HOLD_BRAIN_PROMOTE_RVOL_MIN: float = Field(default=1.5, ge=1.0, description="Min RVOL (vs 20-bar avg) to promote")
+    HOLD_BRAIN_PROMOTE_EMA_SLOPE_MIN: float = Field(default=0.0, description="Min EMA slope to promote (0 = rising)")
+    HOLD_BRAIN_PROMOTE_EXTEND_MIN: int = Field(default=10, ge=1, description="Minutes to extend deadline on promote")
+    HOLD_BRAIN_DEMOTE_FLAT_MIN: int = Field(default=2, ge=1, description="Minutes flat/negative to demote (expire early)")
+    HOLD_BRAIN_TRAILING_STOP_R_TRIGGER: float = Field(default=1.5, ge=1.0, description="R-multiple to activate trailing stop")
+    HOLD_BRAIN_TRAILING_STOP_PCT: float = Field(default=0.02, ge=0.005, description="Trailing stop % from peak")
+    HOLD_BRAIN_MAX_HOLD_HOURS: float = Field(default=8.0, ge=0.5, description="Hard cap max hold time (hours)")
 
     # === LOGGING ===
     LOG_LEVEL: str = Field(default="INFO", description="Logging level (DEBUG, INFO, WARNING, ERROR)")
