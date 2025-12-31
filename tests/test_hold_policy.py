@@ -106,13 +106,16 @@ def test_trailing_stop_activates():
         HOLD_BRAIN_PROMOTE_R_MIN=10.0,  # High to prevent promotion
     )
 
+    now = int(time.time())
     position = {
         'symbol': 'SOL/USDT',
         'entry_price': 100.0,
         'stop_loss': 98.0,  # 2 point risk
         'side': 'long',
         'peak_price': None,
-        'timestamp_open': int(time.time()),
+        'timestamp_open': now - 60,  # 1 minute ago
+        'deadline_ts': now + 300,  # 5 min deadline
+        'promoted_count': 0,
     }
 
     current_price = 105.0  # +2.5R (5 point gain / 2 point risk)
@@ -120,16 +123,17 @@ def test_trailing_stop_activates():
     # Should activate trailing stop
     new_stop = calculate_trailing_stop(position, current_price, position.get('peak_price'), mock_settings)
     assert new_stop is not None, "Trailing stop should activate at +2.5R"
-    assert new_stop > position['stop_loss'], "New stop should be higher than original"
+    assert new_stop > position['stop_loss'], f"New stop {new_stop} should be > original {position['stop_loss']}"
 
-    # Test full update
+    # Test full update (make a copy)
+    original_stop = position['stop_loss']
     updated_pos, action = update_position_with_hold_brain(
-        position, current_price, None, mock_settings
+        position.copy(), current_price, None, mock_settings
     )
 
-    assert action == "TRAILING_STOP", "Action should be TRAILING_STOP"
+    assert action == "TRAILING_STOP", f"Action should be TRAILING_STOP, got {action}"
     assert updated_pos['peak_price'] == current_price, "Peak price should be set"
-    assert updated_pos['stop_loss'] > position['stop_loss'], "Stop should be trailed up"
+    assert updated_pos['stop_loss'] > original_stop, f"Stop {updated_pos['stop_loss']} should be > original {original_stop}"
 
     print("✅ Test passed: Trailing stop activates correctly")
 
