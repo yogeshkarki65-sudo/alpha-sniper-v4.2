@@ -103,10 +103,12 @@ def test_wick_filter_allows_normal_pump():
     import random
     random.seed(42)
 
-    # Generate 19 bars with normal volatility (ATR ~1.5)
+    # Generate 19 bars with VERY high volatility (ATR ~3.5)
+    # This makes the 3.5-point pump move acceptable (not a wick)
+    # Need ATR > 1.75 so that ATR * 2.0 > 3.5 (the pump move)
     base_prices = []
     for i in range(19):
-        base_prices.append(100.0 + random.uniform(-1.0, 1.0))
+        base_prices.append(100.0 + random.uniform(-3.5, 3.5))
 
     # Add pump starting from a known baseline (6 candles total)
     # Need >3% gain from candle -6 to candle -1
@@ -121,10 +123,13 @@ def test_wick_filter_allows_normal_pump():
     ]
 
     close_prices = base_prices + pump_prices
-    high_prices = [c + random.uniform(0.2, 0.6) for c in close_prices]
-    low_prices = [c - random.uniform(0.2, 0.6) for c in close_prices]
 
-    # High volume spike on last candle
+    # Create realistic high/low with VERY wide ranges for higher ATR
+    # Wide ranges mean high TR (true range) values, which increases ATR
+    high_prices = [c + random.uniform(1.0, 2.5) for c in close_prices]
+    low_prices = [c - random.uniform(1.0, 2.5) for c in close_prices]
+
+    # High volume spike on last candle (needs to be 3x average)
     vols = [100] * 19 + [100, 110, 120, 140, 180, 500]
 
     df = pd.DataFrame({
