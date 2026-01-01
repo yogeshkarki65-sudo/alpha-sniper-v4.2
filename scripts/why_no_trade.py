@@ -35,7 +35,12 @@ async def main():
     settings = get_settings()
 
     # Initialize components
-    exchange = AsyncExchange(settings)
+    exchange = AsyncExchange(
+        exchange_id=settings.EXCHANGE_ID,
+        api_key=settings.API_KEY,
+        secret=settings.API_SECRET,
+        testnet=settings.TESTNET
+    )
     await exchange.initialize()
 
     risk = AsyncRiskEngine(settings.DB_PATH, settings, None)
