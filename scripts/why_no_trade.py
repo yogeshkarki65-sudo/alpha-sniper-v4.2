@@ -219,11 +219,6 @@ async def main():
 
         pump_engine = PumpEngine(settings, diag_logger)
 
-        # Ensure config compatibility for engines expecting config.pump_engine_enabled
-        if not hasattr(pump_engine.config, 'pump_engine_enabled'):
-            from types import SimpleNamespace
-            pump_engine.config = SimpleNamespace(pump_engine_enabled=True)
-
         # Inject risk engine for diagnostics
         if hasattr(pump_engine, 'set_risk'):
             pump_engine.set_risk(risk)

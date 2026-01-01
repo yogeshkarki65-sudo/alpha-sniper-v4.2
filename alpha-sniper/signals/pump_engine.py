@@ -20,11 +20,6 @@ class PumpEngine:
         self.config = config
         self.logger = logger
 
-        # Compatibility: some callers pass settings instead of config
-        # Ensure config has pump_engine_enabled attribute
-        if not hasattr(self.config, 'pump_engine_enabled'):
-            self.config = SimpleNamespace(pump_engine_enabled=True)
-
         # Optional risk injection for diagnostic tools
         if not hasattr(self, 'risk'):
             self.risk = None
