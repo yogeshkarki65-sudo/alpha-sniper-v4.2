@@ -13,6 +13,7 @@ import asyncio
 import json
 import sys
 import time
+import logging
 from pathlib import Path
 from collections import defaultdict
 
@@ -25,6 +26,10 @@ from risk.async_risk_engine import AsyncRiskEngine
 from signals.pump_engine import PumpEngine
 from universe.select import select_top_liquid_symbols_with_cache
 from scanner.runner import scan_symbols
+
+# Setup simple logger for diagnostics
+logging.basicConfig(level=logging.WARNING, format='%(message)s')
+diag_logger = logging.getLogger('diagnostic')
 
 
 async def main():
@@ -43,10 +48,10 @@ async def main():
     )
     await exchange.load_markets()
 
-    risk = AsyncRiskEngine(settings.DB_PATH, settings, None)
+    risk = AsyncRiskEngine(settings.DB_PATH, settings, diag_logger)
     await risk.connect()
 
-    pump_engine = PumpEngine(settings, None)
+    pump_engine = PumpEngine(settings, diag_logger)
 
     # Reset audit counters
     await risk.audit_reset()

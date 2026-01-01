@@ -10,6 +10,7 @@ import json
 import sys
 import os
 import time
+import logging
 from typing import Dict, Any
 from pathlib import Path
 
@@ -20,6 +21,10 @@ from config.settings import get_settings, Settings
 from core.exchange_async import AsyncExchange
 from risk.async_risk_engine import AsyncRiskEngine
 from signals.pump_engine import PumpEngine
+
+# Setup simple logger for diagnostics
+logging.basicConfig(level=logging.WARNING, format='%(message)s')
+diag_logger = logging.getLogger('diagnostic')
 
 async def check_exchange(settings: Settings) -> Dict[str, Any]:
     """Test exchange connection and fetch capabilities."""
@@ -77,7 +82,7 @@ async def check_database(settings: Settings) -> Dict[str, Any]:
     }
 
     try:
-        risk = AsyncRiskEngine(settings.DB_PATH, settings, None)
+        risk = AsyncRiskEngine(settings.DB_PATH, settings, diag_logger)
         await risk.connect()
 
         # Check tables exist
@@ -182,7 +187,7 @@ async def check_pump_detector(settings: Settings) -> Dict[str, Any]:
         )
         await exchange.load_markets()
 
-        pump_engine = PumpEngine(settings, None)
+        pump_engine = PumpEngine(settings, diag_logger)
 
         # Fetch some markets
         markets = await exchange.fetch_markets()
