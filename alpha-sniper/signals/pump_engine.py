@@ -45,7 +45,12 @@ class PumpEngine:
         if hasattr(self.config, 'pump_engine_enabled') and not self.config.pump_engine_enabled:
             return signals
 
-        # Get regime-specific thresholds
+        # Get regime-specific thresholds (defensive for diagnostic/test environments)
+        if not hasattr(self.config, 'get_pump_thresholds'):
+            if self.logger:
+                self.logger.warning("Config missing get_pump_thresholds - pump engine disabled")
+            return signals
+
         thresholds = self.config.get_pump_thresholds(regime)
 
         # Log active thresholds for this regime
