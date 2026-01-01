@@ -30,8 +30,13 @@ async def check_exchange(settings: Settings) -> Dict[str, Any]:
     }
 
     try:
-        exchange = AsyncExchange(settings)
-        await exchange.initialize()
+        exchange = AsyncExchange(
+            exchange_id=settings.EXCHANGE_ID,
+            api_key=settings.API_KEY,
+            secret=settings.API_SECRET,
+            testnet=settings.TESTNET
+        )
+        await exchange.load_markets()
 
         # Check balance
         balance = await exchange.fetch_balance()
@@ -72,8 +77,8 @@ async def check_database(settings: Settings) -> Dict[str, Any]:
     }
 
     try:
-        risk = AsyncRiskEngine(settings)
-        await risk.initialize()
+        risk = AsyncRiskEngine(settings.DB_PATH, settings, None)
+        await risk.connect()
 
         # Check tables exist
         cursor = await risk.conn.execute(
@@ -169,10 +174,15 @@ async def check_pump_detector(settings: Settings) -> Dict[str, Any]:
     }
 
     try:
-        exchange = AsyncExchange(settings)
-        await exchange.initialize()
+        exchange = AsyncExchange(
+            exchange_id=settings.EXCHANGE_ID,
+            api_key=settings.API_KEY,
+            secret=settings.API_SECRET,
+            testnet=settings.TESTNET
+        )
+        await exchange.load_markets()
 
-        pump_engine = PumpEngine(settings)
+        pump_engine = PumpEngine(settings, None)
 
         # Fetch some markets
         markets = await exchange.fetch_markets()

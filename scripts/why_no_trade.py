@@ -41,7 +41,7 @@ async def main():
         secret=settings.API_SECRET,
         testnet=settings.TESTNET
     )
-    await exchange.initialize()
+    await exchange.load_markets()
 
     risk = AsyncRiskEngine(settings.DB_PATH, settings, None)
     await risk.connect()

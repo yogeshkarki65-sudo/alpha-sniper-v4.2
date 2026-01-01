@@ -16,6 +16,31 @@ python main.py
 
 See `alpha-sniper/README.md` for detailed documentation.
 
+## Development & Diagnostics
+
+Install development dependencies for running diagnostic scripts:
+
+```bash
+pip install -r requirements-dev.txt
+```
+
+### Diagnostic Scripts
+
+**Health Check:**
+```bash
+python scripts/diagnostics.py | tee /tmp/alpha_diag.json
+```
+
+**Settings Dump:**
+```bash
+python scripts/print_settings.py | tee /tmp/alpha_settings.json
+```
+
+**Why No Trade Analysis:**
+```bash
+python scripts/why_no_trade.py | tee /tmp/alpha_why_no_trade.json
+```
+
 ## Features
 
 - ✅ SIM and LIVE modes
