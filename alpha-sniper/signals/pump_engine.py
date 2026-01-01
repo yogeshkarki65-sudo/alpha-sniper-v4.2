@@ -5,6 +5,7 @@ Pump Engine for Alpha Sniper V4.2
 - Strict filters, tight risk
 """
 from utils import helpers
+from types import SimpleNamespace
 
 
 class PumpEngine:
@@ -19,12 +20,25 @@ class PumpEngine:
         self.config = config
         self.logger = logger
 
+        # Compatibility: some callers pass settings instead of config
+        # Ensure config has pump_engine_enabled attribute
+        if not hasattr(self.config, 'pump_engine_enabled'):
+            self.config = SimpleNamespace(pump_engine_enabled=True)
+
+        # Optional risk injection for diagnostic tools
+        if not hasattr(self, 'risk'):
+            self.risk = None
+
         # Pump debug toggle - directly access config attribute
         self.debug_enabled = config.pump_debug_logging if hasattr(config, 'pump_debug_logging') else False
 
         # Log debug status on initialization
-        if self.debug_enabled:
+        if self.debug_enabled and self.logger:
             self.logger.info("[PUMP_DEBUG] Debug logging ENABLED for pump engine")
+
+    def set_risk(self, risk):
+        """Allow external risk engine injection for diagnostics."""
+        self.risk = risk
 
     def generate_signals(self, market_data: dict, regime: str, open_positions=None) -> list:
         """
@@ -32,7 +46,8 @@ class PumpEngine:
         """
         signals = []
 
-        if not self.config.pump_engine_enabled:
+        # Check if engine is disabled via config flag
+        if hasattr(self.config, 'pump_engine_enabled') and not self.config.pump_engine_enabled:
             return signals
 
         # Get regime-specific thresholds

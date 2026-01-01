@@ -15,6 +15,7 @@ import sys
 import time
 import logging
 import inspect
+import contextlib
 from pathlib import Path
 from collections import defaultdict
 
@@ -26,19 +27,18 @@ from core.exchange_async import AsyncExchange
 from risk.async_risk_engine import AsyncRiskEngine
 from signals.pump_engine import PumpEngine
 
-# Try to import universe selectors (with fallback)
+# Try to import universe selectors (with fallback) - cleaner with contextlib
 _universe_candidates = []
-try:
-    from universe.select import select_top_liquid_symbols_with_cache
-    _universe_candidates.append(select_top_liquid_symbols_with_cache)
-except Exception:
-    pass
-
-try:
-    from universe.select import select_top_liquid_symbols
-    _universe_candidates.append(select_top_liquid_symbols)
-except Exception:
-    pass
+for _name in (
+    "select_top_liquid_symbols_with_cache",
+    "select_top_liquid_symbols",
+    "select_top_symbols",
+):
+    with contextlib.suppress(Exception):
+        from universe import select as _selmod
+        fn = getattr(_selmod, _name, None)
+        if fn:
+            _universe_candidates.append(fn)
 
 # Try to import scanner
 try:
@@ -95,7 +95,8 @@ async def _fallback_scan_symbols(exchange, symbols, timeframe: str = "1m", concu
     """
     Fallback market data fetcher with concurrency limiting.
 
-    Returns dict of {symbol: {df: None, indicators: {}, ohlcv: [...]}}
+    Returns dict of {symbol: {df: dict-like, indicators: {}, ohlcv: [...]}}
+    Creates minimal DF-like structure to satisfy pump engine analysis.
     """
     market_data = {}
     sem = asyncio.Semaphore(concurrency)
@@ -104,10 +105,40 @@ async def _fallback_scan_symbols(exchange, symbols, timeframe: str = "1m", concu
         async with sem:
             try:
                 ohlcv = await exchange.fetch_ohlcv(sym, timeframe, limit=26)
+
+                # OHLCV structure: [[ts, open, high, low, close, volume], ...]
+                # Create dict-like DF structure for basic analysis
+                if ohlcv:
+                    closes = [row[4] for row in ohlcv]
+                    highs = [row[2] for row in ohlcv]
+                    lows = [row[3] for row in ohlcv]
+                    vols = [row[5] for row in ohlcv]
+
+                    # Simple dict that mimics pandas DataFrame API
+                    class DictFrame:
+                        def __init__(self, data):
+                            self.data = data
+                            self.columns = list(data.keys())
+
+                        def __len__(self):
+                            return len(self.data.get('close', []))
+
+                        def __getitem__(self, key):
+                            return self.data.get(key, [])
+
+                    df = DictFrame({
+                        "close": closes,
+                        "high": highs,
+                        "low": lows,
+                        "volume": vols,
+                    })
+                else:
+                    df = None
+
                 market_data[sym] = {
-                    "df": None,  # Scanner should populate this
+                    "df": df,
                     "indicators": {},
-                    "ohlcv": ohlcv
+                    "ohlcv": ohlcv or []
                 }
             except Exception as e:
                 diag_logger.warning(f"Failed to fetch {sym}: {e}")
@@ -188,6 +219,17 @@ async def main():
 
         pump_engine = PumpEngine(settings, diag_logger)
 
+        # Ensure config compatibility for engines expecting config.pump_engine_enabled
+        if not hasattr(pump_engine.config, 'pump_engine_enabled'):
+            from types import SimpleNamespace
+            pump_engine.config = SimpleNamespace(pump_engine_enabled=True)
+
+        # Inject risk engine for diagnostics
+        if hasattr(pump_engine, 'set_risk'):
+            pump_engine.set_risk(risk)
+        else:
+            pump_engine.risk = risk
+
         # Reset audit counters
         await risk.audit_reset()
 
@@ -196,17 +238,28 @@ async def main():
         universe = await _select_universe_robust(exchange, settings)
         print(f"✓ Selected {len(universe)} symbols\n", file=sys.stderr)
 
-        # Step 2: Fetch market data (with fallback)
+        # Step 2: Fetch market data (signature-aware with fallback)
         print(f"📈 Fetching market data (concurrency={getattr(settings, 'SCAN_CONCURRENCY', 5)})...", file=sys.stderr)
 
         if _scan_symbols is not None:
             try:
-                market_data = await _scan_symbols(
-                    exchange,
-                    universe,
-                    timeframe=settings.TIMEFRAME,
-                    concurrency=getattr(settings, 'SCAN_CONCURRENCY', 5)
-                )
+                # Signature-safe call to scanner
+                sig = inspect.signature(_scan_symbols)
+                kwargs = {}
+                if "exchange" in sig.parameters:
+                    kwargs["exchange"] = exchange
+                if "ex" in sig.parameters:
+                    kwargs["ex"] = exchange
+                if "symbols" in sig.parameters:
+                    kwargs["symbols"] = universe
+                if "timeframe" in sig.parameters:
+                    kwargs["timeframe"] = settings.TIMEFRAME
+                if "concurrency" in sig.parameters:
+                    kwargs["concurrency"] = getattr(settings, 'SCAN_CONCURRENCY', 5)
+                if "candles" in sig.parameters:
+                    kwargs["candles"] = 26
+
+                market_data = await _scan_symbols(**kwargs)
             except Exception as e:
                 diag_logger.warning(f"Scanner failed, using fallback: {e}")
                 market_data = await _fallback_scan_symbols(
