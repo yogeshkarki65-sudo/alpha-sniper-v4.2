@@ -135,6 +135,9 @@ class Settings(BaseSettings):
     HEALTH_CHECK_ENABLED: bool = Field(default=False, description="Enable /healthz HTTP endpoint")
     HEALTH_CHECK_PORT: int = Field(default=8080, ge=1024, le=65535, description="Health check HTTP port")
 
+    # === DECISION AUDIT (Debug mode) ===
+    DEBUG_DECISION_AUDIT: bool = Field(default=True, description="Track why signals fail at each filter stage")
+
     # Pydantic settings configuration
     model_config = SettingsConfigDict(
         env_file=".env",

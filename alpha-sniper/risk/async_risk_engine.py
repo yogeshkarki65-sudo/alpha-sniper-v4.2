@@ -123,6 +123,11 @@ class AsyncRiskEngine:
                 slippage_samples INTEGER DEFAULT 0
             );
 
+            CREATE TABLE IF NOT EXISTS audit (
+                key TEXT PRIMARY KEY,
+                value INTEGER DEFAULT 0
+            );
+
             CREATE INDEX IF NOT EXISTS idx_trades_closed_at ON trades(closed_at);
             CREATE INDEX IF NOT EXISTS idx_equity_timestamp ON equity_snapshots(timestamp);
             CREATE INDEX IF NOT EXISTS idx_symbol_meta_cooldown ON symbol_meta(cooldown_until_ts);
@@ -671,3 +676,51 @@ class AsyncRiskEngine:
             "avg_slippage_bps": avg_slippage_bps,
             "open_positions": len(open_positions),
         }
+
+    # === DECISION AUDIT HELPERS ===
+
+    async def audit_bump(self, key: str, by: int = 1):
+        """
+        Increment an audit counter.
+
+        Args:
+            key: Counter key (e.g. "sig:ret5m", "gate:spread")
+            by: Amount to increment by
+        """
+        if not getattr(self.settings, "DEBUG_DECISION_AUDIT", True):
+            return
+
+        try:
+            await self.conn.execute(
+                "INSERT INTO audit(key, value) VALUES(?, 0) ON CONFLICT(key) DO NOTHING",
+                (key,),
+            )
+            await self.conn.execute(
+                "UPDATE audit SET value = COALESCE(value, 0) + ? WHERE key = ?", (by, key)
+            )
+            await self.conn.commit()
+        except Exception as e:
+            self.log.error(f"audit_bump failed for {key}: {e}")
+
+    async def audit_snapshot(self) -> Dict[str, int]:
+        """
+        Get current audit counters.
+
+        Returns:
+            Dict mapping counter keys to values
+        """
+        try:
+            cur = await self.conn.execute("SELECT key, value FROM audit ORDER BY key")
+            rows = await cur.fetchall()
+            return {k: int(v) for k, v in rows}
+        except Exception as e:
+            self.log.error(f"audit_snapshot failed: {e}")
+            return {}
+
+    async def audit_reset(self):
+        """Reset all audit counters."""
+        try:
+            await self.conn.execute("DELETE FROM audit")
+            await self.conn.commit()
+        except Exception as e:
+            self.log.error(f"audit_reset failed: {e}")
