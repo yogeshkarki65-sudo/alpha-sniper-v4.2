@@ -100,6 +100,7 @@ async def fetch_symbol_data(
 
 
 async def scan_symbols(
+    *,
     symbols: List[str],
     timeframe: str,
     exchange,

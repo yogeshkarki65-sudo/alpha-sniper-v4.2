@@ -19,10 +19,29 @@ class PumpEngine:
     def __init__(self, config, logger):
         self.config = config
         self.logger = logger
+        self.settings = config  # Alias for compatibility
 
         # Optional risk injection for diagnostic tools
         if not hasattr(self, 'risk'):
             self.risk = None
+
+        # Provide a thresholds fallback so the engine never "disables" silently
+        if not hasattr(self.config, 'get_pump_thresholds'):
+            def _fallback_thresholds(regime: str):
+                # Use Settings; prefer early detector knobs if enabled, else legacy pump defaults
+                s = self.settings
+                return SimpleNamespace(
+                    min_score=getattr(s, 'MIN_SCORE', 28),
+                    min_rvol=getattr(s, 'EARLY_VOL_SPIKE_MIN', 2.0),
+                    min_24h_return=0.0,
+                    max_24h_return=1000.0,
+                    min_momentum=0.0,
+                    min_24h_quote_volume=getattr(s, 'MIN_24H_QUOTE_VOLUME', 47000.0),
+                    new_listing_min_rvol=getattr(s, 'EARLY_VOL_SPIKE_MIN', 2.0),
+                    new_listing_min_score=getattr(s, 'MIN_SCORE', 28),
+                    new_listing_min_momentum=0.0,
+                )
+            self.config.get_pump_thresholds = _fallback_thresholds
 
         # Pump debug toggle - directly access config attribute
         self.debug_enabled = config.pump_debug_logging if hasattr(config, 'pump_debug_logging') else False
@@ -45,12 +64,7 @@ class PumpEngine:
         if hasattr(self.config, 'pump_engine_enabled') and not self.config.pump_engine_enabled:
             return signals
 
-        # Get regime-specific thresholds (defensive for diagnostic/test environments)
-        if not hasattr(self.config, 'get_pump_thresholds'):
-            if self.logger:
-                self.logger.warning("Config missing get_pump_thresholds - pump engine disabled")
-            return signals
-
+        # Get regime-specific thresholds (fallback provided in __init__)
         thresholds = self.config.get_pump_thresholds(regime)
 
         # Log active thresholds for this regime

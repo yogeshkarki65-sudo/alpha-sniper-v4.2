@@ -8,9 +8,65 @@ Filters and sorts symbols to keep only the most liquid pairs.
 from __future__ import annotations
 
 import logging
+import re
 from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
+
+
+def _apply_exclusions(symbols: List[str], settings) -> List[str]:
+    """
+    Apply universe quality filters: exclude stable/pegged pairs and user-defined patterns.
+
+    Args:
+        symbols: List of symbols to filter
+        settings: Settings object with UNIVERSE_EXCLUDE_BASES and UNIVERSE_EXCLUDE_SYMBOL_PATTERNS
+
+    Returns:
+        Filtered list of symbols
+    """
+    bases = []
+    patterns: List[re.Pattern] = []
+
+    # Parse excluded base currencies (e.g., "USDC,USDT,FDUSD")
+    if getattr(settings, 'UNIVERSE_EXCLUDE_BASES', None):
+        bases = [b.strip().upper() for b in settings.UNIVERSE_EXCLUDE_BASES.split(',') if b.strip()]
+
+    # Parse excluded symbol patterns (e.g., "^USDC/USDT$,^PAXG/USDT$")
+    if getattr(settings, 'UNIVERSE_EXCLUDE_SYMBOL_PATTERNS', None):
+        for raw in settings.UNIVERSE_EXCLUDE_SYMBOL_PATTERNS.split(','):
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                patterns.append(re.compile(raw))
+            except re.error:
+                logger.warning(f"Invalid regex pattern: {raw}")
+                continue
+
+    # Apply filters
+    out = []
+    for sym in symbols:
+        base, _, quote = sym.partition('/')
+
+        # Exclude if base currency is in exclusion list
+        if base.upper() in bases:
+            continue
+
+        # Exclude if symbol matches any exclusion pattern
+        if any(p.search(sym) for p in patterns):
+            continue
+
+        out.append(sym)
+
+    if len(out) != len(symbols):
+        logger.info(
+            f"Universe exclusions: {len(symbols)} → {len(out)} symbols | "
+            f"excluded_bases={bases[:3]}{'...' if len(bases) > 3 else ''} | "
+            f"patterns={len(patterns)}"
+        )
+
+    return out
 
 
 async def select_top_liquid_symbols(
@@ -18,6 +74,7 @@ async def select_top_liquid_symbols(
     base_quote: str = "USDT",
     max_symbols: int = 80,
     min_quote_volume: float = 50000.0,
+    settings=None,
 ) -> List[str]:
     """
     Select top N most liquid symbols by 24h quote volume.
@@ -27,6 +84,7 @@ async def select_top_liquid_symbols(
         base_quote: Quote currency to filter (e.g., 'USDT')
         max_symbols: Maximum number of symbols to return
         min_quote_volume: Minimum 24h quote volume threshold
+        settings: Optional settings object for exclusion filters
 
     Returns:
         List of symbol strings sorted by liquidity (most liquid first)
@@ -70,9 +128,16 @@ async def select_top_liquid_symbols(
         # Sort by quote volume descending
         candidates.sort(key=lambda x: x["quote_volume"], reverse=True)
 
-        # Take top N
-        selected = candidates[:max_symbols]
-        selected_symbols = [c["symbol"] for c in selected]
+        # Collect all symbols before exclusions
+        selected_symbols = [c["symbol"] for c in candidates]
+
+        # Apply exclusions if settings provided
+        if settings is not None:
+            selected_symbols = _apply_exclusions(selected_symbols, settings)
+
+        # Take top N after exclusions
+        selected_symbols = selected_symbols[:max_symbols]
+        selected = [c for c in candidates if c["symbol"] in selected_symbols]
 
         # Log selection summary
         if selected:
@@ -103,6 +168,7 @@ async def select_top_liquid_symbols_with_cache(
     max_symbols: int = 80,
     min_quote_volume: float = 50000.0,
     cache: Optional[Dict] = None,
+    settings=None,
 ) -> List[str]:
     """
     Select top liquid symbols with optional caching.
@@ -119,6 +185,7 @@ async def select_top_liquid_symbols_with_cache(
         max_symbols: Max symbols
         min_quote_volume: Min 24h quote volume
         cache: Optional dict to check/update
+        settings: Optional settings object for exclusion filters
 
     Returns:
         List of symbols
@@ -137,7 +204,7 @@ async def select_top_liquid_symbols_with_cache(
 
     # Fetch fresh universe
     symbols = await select_top_liquid_symbols(
-        exchange, base_quote, max_symbols, min_quote_volume
+        exchange, base_quote, max_symbols, min_quote_volume, settings
     )
 
     # Update cache

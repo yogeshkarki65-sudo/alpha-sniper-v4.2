@@ -28,7 +28,7 @@ class Settings(BaseSettings):
 
     # === SCAN SETTINGS ===
     SCAN_CONCURRENCY: int = Field(default=5, ge=1, le=20, description="Max concurrent OHLCV fetches")
-    SCAN_INTERVAL_SECONDS: int = Field(default=300, ge=10, description="Scan interval (seconds)")
+    SCAN_INTERVAL_SECONDS: int = Field(default=60, ge=10, description="Scan interval (seconds)")
     TIMEFRAME: str = Field(default="1m", description="Default OHLCV timeframe")
 
     # === UNIVERSE SETTINGS ===
@@ -36,6 +36,13 @@ class Settings(BaseSettings):
     UNIVERSE_BASE_QUOTE: str = Field(default="USDT", description="Quote currency filter")
     UNIVERSE_MIN_QUOTE_VOLUME: float = Field(default=50000.0, ge=0, description="Min 24h quote volume")
     UNIVERSE_CACHE_TTL: int = Field(default=300, ge=60, description="Universe cache TTL (seconds)")
+
+    # Universe quality filters (optional; comma-separated values)
+    # Examples:
+    #   UNIVERSE_EXCLUDE_BASES="USDC,USDT,FDUSD,DAI,TUSD,USDD,EUR,PAXG,WBTC,BTCB"
+    #   UNIVERSE_EXCLUDE_SYMBOL_PATTERNS="^USDC/USDT$,^PAXG/USDT$"
+    UNIVERSE_EXCLUDE_BASES: Optional[str] = Field(default=None, description="Comma-separated base currencies to exclude")
+    UNIVERSE_EXCLUDE_SYMBOL_PATTERNS: Optional[str] = Field(default=None, description="Comma-separated regex patterns to exclude symbols")
 
     # === DATABASE SETTINGS ===
     DB_PATH: str = Field(default="./data/alpha.db", description="SQLite database path")

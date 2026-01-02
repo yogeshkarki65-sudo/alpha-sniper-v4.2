@@ -132,12 +132,28 @@ async def _fallback_scan_symbols(exchange, symbols, timeframe: str = "1m", concu
                         "low": lows,
                         "volume": vols,
                     })
+
+                    # Minimal indicator shim for diagnostics only (no trading impact)
+                    # This produces a reasonable score so diagnostics aren't polluted by score=0
+                    score = 0.0
+                    try:
+                        ret5 = (closes[-1] / closes[-6]) - 1.0 if len(closes) >= 6 else 0.0
+                        v_last = float(vols[-1]) if vols else 0.0
+                        v_avg20 = (sum(vols[-20:]) / max(1, len(vols[-20:]))) if vols else 0.0
+                        vspike = (v_last / v_avg20) if v_avg20 > 0 else 0.0
+                        ema5 = sum(closes[-5:]) / max(1, len(closes[-5:])) if closes else 0.0
+                        ema5_prev = sum(closes[-6:-1]) / max(1, len(closes[-6:-1])) if len(closes) >= 6 else ema5
+                        slope = 1.0 if (ema5 - ema5_prev) >= 0 else 0.0
+                        score = max(0.0, (ret5 * 100.0) * 0.6 + (vspike / 2.0) * 0.3 + slope * 10.0)
+                    except Exception:
+                        pass
                 else:
                     df = None
+                    score = 0.0
 
                 market_data[sym] = {
                     "df": df,
-                    "indicators": {},
+                    "indicators": {"score": score},
                     "ohlcv": ohlcv or []
                 }
             except Exception as e:
@@ -165,6 +181,7 @@ async def _select_universe_robust(exchange, settings):
         'min_volume': settings.UNIVERSE_MIN_QUOTE_VOLUME,
         'cache': None,  # For cached version
         'cache_ttl': settings.UNIVERSE_CACHE_TTL if hasattr(settings, 'UNIVERSE_CACHE_TTL') else 300,
+        'settings': settings,  # Pass settings for exclusion filters
     }
 
     # Try each candidate function
