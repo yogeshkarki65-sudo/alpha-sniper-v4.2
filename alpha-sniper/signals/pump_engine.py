@@ -25,7 +25,8 @@ class PumpEngine:
         if not hasattr(self, 'risk'):
             self.risk = None
 
-        # Provide a thresholds fallback so the engine never "disables" silently
+        # Store fallback thresholds function as instance method if config doesn't have it
+        self._get_thresholds = None
         if not hasattr(self.config, 'get_pump_thresholds'):
             def _fallback_thresholds(regime: str):
                 # Use Settings; prefer early detector knobs if enabled, else legacy pump defaults
@@ -41,7 +42,7 @@ class PumpEngine:
                     new_listing_min_score=getattr(s, 'MIN_SCORE', 28),
                     new_listing_min_momentum=0.0,
                 )
-            self.config.get_pump_thresholds = _fallback_thresholds
+            self._get_thresholds = _fallback_thresholds
 
         # Pump debug toggle - directly access config attribute
         self.debug_enabled = config.pump_debug_logging if hasattr(config, 'pump_debug_logging') else False
@@ -64,8 +65,16 @@ class PumpEngine:
         if hasattr(self.config, 'pump_engine_enabled') and not self.config.pump_engine_enabled:
             return signals
 
-        # Get regime-specific thresholds (fallback provided in __init__)
-        thresholds = self.config.get_pump_thresholds(regime)
+        # Get regime-specific thresholds (use fallback if config doesn't have method)
+        if hasattr(self.config, 'get_pump_thresholds'):
+            thresholds = self.config.get_pump_thresholds(regime)
+        elif self._get_thresholds is not None:
+            thresholds = self._get_thresholds(regime)
+        else:
+            # No thresholds available - return empty signals
+            if self.logger:
+                self.logger.warning("No threshold source available - pump engine disabled")
+            return signals
 
         # Log active thresholds for this regime
         if self.debug_enabled:
