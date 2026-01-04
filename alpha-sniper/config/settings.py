@@ -133,6 +133,16 @@ class Settings(BaseSettings):
     LIVE_FLIP_MAX_P95_SLIP_BPS: int = Field(default=40, ge=1, description="Maximum p95 slippage in bps (0.40%)")
     LIVE_FLIP_MAX_IOC_REJECT_RATE: float = Field(default=0.15, ge=0.0, le=1.0, description="Maximum IOC reject rate")
 
+    # === FLOW LOOSEN/RESTORE (universe & depth gates) ===
+    FLOW_QUIET_SCANS: int = Field(default=30, ge=5, description="Scans below threshold before loosening gates")
+    FLOW_RESTORE_SCANS: int = Field(default=30, ge=5, description="Scans above threshold before restoring gates")
+    LOOSEN_UNIVERSE_MIN_QUOTE_VOLUME_STEP: float = Field(default=25000.0, ge=1000.0, description="Volume step when loosening")
+    LOOSEN_UNIVERSE_MIN_QUOTE_VOLUME_MIN: float = Field(default=25000.0, ge=1000.0, description="Minimum volume floor")
+    LOOSEN_UNIVERSE_SIZE_STEP: int = Field(default=25, ge=5, description="Universe size step when loosening")
+    LOOSEN_UNIVERSE_SIZE_MAX: int = Field(default=250, ge=50, description="Maximum universe size")
+    LOOSEN_MIN_DEPTH_USD_ABS_STEP: float = Field(default=2000.0, ge=100.0, description="Depth step when loosening")
+    LOOSEN_MIN_DEPTH_USD_ABS_MIN: float = Field(default=8000.0, ge=1000.0, description="Minimum depth floor")
+
     # === PHASE 1.1: DIGEST & TRACKING ===
     DIGEST_ENABLE: bool = Field(default=True, description="Enable daily Telegram digest")
     DIGEST_HOUR_UTC: int = Field(default=0, ge=0, le=23, description="Daily digest hour (UTC, 0 = midnight)")

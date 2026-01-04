@@ -54,6 +54,15 @@ class AutoTunePro:
         self._last_adjust_scan = -10**9
         self._scan_count = 0
 
+        # Baselines captured at startup (for restore logic)
+        self._base_universe_min_quote_volume = float(getattr(self.s, "UNIVERSE_MIN_QUOTE_VOLUME", 100000.0))
+        self._base_universe_size = int(getattr(self.s, "UNIVERSE_SIZE", 100))
+        self._base_min_depth_usd_abs = float(getattr(self.s, "MIN_DEPTH_USD_ABSOLUTE", 15000.0))
+
+        # Flow loosen/restore counters
+        self._quiet_scans = 0
+        self._restore_scans = 0
+
     # === HOOKS (called by main loop) ===
 
     def on_scan(self, signals_count: int):
@@ -232,6 +241,103 @@ class AutoTunePro:
                 f"VSP={self.s.EARLY_VOL_SPIKE_MIN:.2f}, "
                 f"SCORE={self.s.MIN_SCORE}"
             )
+
+        # When thresholds are at floor and flow is near zero, consider non-signal gate loosening
+        at_floor = (
+            abs(self.s.EARLY_RET_5M_MIN - self.s.AUTOTUNE_RET5M_BOUNDS[0]) < 1e-9 and
+            abs(self.s.EARLY_VOL_SPIKE_MIN - self.s.AUTOTUNE_VSPIKE_BOUNDS[0]) < 1e-9 and
+            self.s.MIN_SCORE <= self.s.AUTOTUNE_SCORE_BOUNDS[0]
+        )
+        self._auto_loosen_restore(per_hour, at_floor)
+
+    def _auto_loosen_restore(self, per_hour: float, at_floor: bool):
+        """
+        Auto-loosen universe/depth gates when extremely quiet with thresholds at floor.
+        Auto-restore toward baseline when flow recovers.
+
+        Args:
+            per_hour: Current signals per hour
+            at_floor: Whether signal thresholds are at their minimum bounds
+        """
+        # Quiet market → Loosen universe/depth gates slowly
+        if per_hour < 0.5 and at_floor:
+            self._quiet_scans += 1
+            self._restore_scans = 0
+
+            if self._quiet_scans >= self.s.FLOW_QUIET_SCANS:
+                # Loosen volume floor
+                new_vol = max(
+                    self.s.LOOSEN_UNIVERSE_MIN_QUOTE_VOLUME_MIN,
+                    float(self.s.UNIVERSE_MIN_QUOTE_VOLUME) - self.s.LOOSEN_UNIVERSE_MIN_QUOTE_VOLUME_STEP
+                )
+                # Expand universe size
+                new_size = min(
+                    self.s.LOOSEN_UNIVERSE_SIZE_MAX,
+                    int(self.s.UNIVERSE_SIZE) + self.s.LOOSEN_UNIVERSE_SIZE_STEP
+                )
+                # Lower depth floor
+                new_depth = max(
+                    self.s.LOOSEN_MIN_DEPTH_USD_ABS_MIN,
+                    float(self.s.MIN_DEPTH_USD_ABSOLUTE) - self.s.LOOSEN_MIN_DEPTH_USD_ABS_STEP
+                )
+
+                changed = False
+                if new_vol != self.s.UNIVERSE_MIN_QUOTE_VOLUME:
+                    self.ovr.set("UNIVERSE_MIN_QUOTE_VOLUME", new_vol)
+                    changed = True
+                if new_size != self.s.UNIVERSE_SIZE:
+                    self.ovr.set("UNIVERSE_SIZE", new_size)
+                    changed = True
+                if new_depth != self.s.MIN_DEPTH_USD_ABSOLUTE:
+                    self.ovr.set("MIN_DEPTH_USD_ABSOLUTE", new_depth)
+                    changed = True
+
+                if changed:
+                    self.log.info(
+                        f"[FLOW_LOOSEN] vol>={new_vol:.0f} size={new_size} depth>={new_depth:.0f}"
+                    )
+
+                self._quiet_scans = 0
+
+        # Flow healthy → Restore toward baseline
+        elif per_hour > self.s.AUTOTUNE_TARGET_MIN_HOURLY:
+            self._restore_scans += 1
+            self._quiet_scans = 0
+
+            if self._restore_scans >= self.s.FLOW_RESTORE_SCANS:
+                # Restore volume floor toward baseline
+                new_vol = min(
+                    self._base_universe_min_quote_volume,
+                    float(self.s.UNIVERSE_MIN_QUOTE_VOLUME) + self.s.LOOSEN_UNIVERSE_MIN_QUOTE_VOLUME_STEP
+                )
+                # Restore universe size toward baseline
+                new_size = max(
+                    self._base_universe_size,
+                    int(self.s.UNIVERSE_SIZE) - self.s.LOOSEN_UNIVERSE_SIZE_STEP
+                )
+                # Restore depth floor toward baseline
+                new_depth = min(
+                    self._base_min_depth_usd_abs,
+                    float(self.s.MIN_DEPTH_USD_ABSOLUTE) + self.s.LOOSEN_MIN_DEPTH_USD_ABS_STEP
+                )
+
+                changed = False
+                if new_vol != self.s.UNIVERSE_MIN_QUOTE_VOLUME:
+                    self.ovr.set("UNIVERSE_MIN_QUOTE_VOLUME", new_vol)
+                    changed = True
+                if new_size != self.s.UNIVERSE_SIZE:
+                    self.ovr.set("UNIVERSE_SIZE", new_size)
+                    changed = True
+                if new_depth != self.s.MIN_DEPTH_USD_ABSOLUTE:
+                    self.ovr.set("MIN_DEPTH_USD_ABSOLUTE", new_depth)
+                    changed = True
+
+                if changed:
+                    self.log.info(
+                        f"[FLOW_RESTORE] vol>={new_vol:.0f} size={new_size} depth>={new_depth:.0f}"
+                    )
+
+                self._restore_scans = 0
 
     def maybe_sizing_autopilot(self):
         """
