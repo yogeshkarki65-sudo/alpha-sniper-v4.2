@@ -79,9 +79,37 @@ journalctl -u alpha-sniper-async.service -n 120 --no-pager | grep -E "EARLY sign
 - ✅ SIM and LIVE modes
 - ✅ Regime-based position sizing (BULL, SIDEWAYS, MILD_BEAR, DEEP_BEAR)
 - ✅ Multiple signal engines (long, short, pump, bear_micro)
+- ✅ **AutoTune Pro** - Self-adjusting thresholds (no more 0-trade days!)
+- ✅ Runtime overrides (change settings without restart)
+- ✅ Sizing autopilot (adaptive risk management)
 - ✅ Comprehensive risk management
-- ✅ Telegram alerts
+- ✅ Telegram alerts with autotune metrics
 - ✅ Safe error handling
+
+### 🤖 AutoTune Pro (NEW!)
+
+The bot now automatically adjusts signal thresholds to maintain healthy signal flow:
+
+- **Threshold Tuning**: Adjusts RET5M, VSpike, and Score to target 1-8 signals/hour
+- **Sizing Autopilot**: Scales RISK_PER_TRADE based on performance (avgR, winrate)
+- **Live Flip**: Auto-disables LIVE_TEST_MODE after 20+ profitable trades
+- **Runtime Overrides**: Change settings on-the-fly via CLI or JSON
+
+**Why This Matters**: Eliminates 2-day periods with 0 trades by automatically lowering thresholds when market volatility is low, and raising them when too many signals trigger.
+
+**CLI Usage**:
+```bash
+# View current overrides
+python scripts/overrides_cli.py show
+
+# Manually adjust threshold
+python scripts/overrides_cli.py set --key MIN_SCORE --value 10
+
+# Reset to defaults
+python scripts/overrides_cli.py reset
+```
+
+**See**: `DEPLOY_AUTOTUNE.md` for deployment instructions
 
 ## Git Commands
 
