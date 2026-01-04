@@ -23,7 +23,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent / "alpha-sniper"))
 
 from config.settings import get_settings
+from config.runtime_settings import RuntimeSettings
 from core.exchange_async import AsyncExchange
+from core.autotune import AutoTunePro
 from db.async_driver import AsyncDB
 from notify.telegram_async import AsyncTelegram
 from scanner.runner import scan_symbols, MarketDataCache
@@ -272,6 +274,7 @@ async def manage_positions_loop(
     exchange: AsyncExchange,
     risk: AsyncRiskEngine,
     telegram: AsyncTelegram,
+    autotune: 'AutoTunePro' = None,
 ):
     """
     Continuously manage open positions.
@@ -325,11 +328,11 @@ async def manage_positions_loop(
                     # Handle brain actions
                     if brain_action == "DEMOTED":
                         logger.info(f"🧠 Hold brain: DEMOTE {symbol} (flat/negative too long)")
-                        await close_position_async(pos, current_price, 'DEMOTED_BY_BRAIN', exchange, risk, telegram)
+                        await close_position_async(pos, current_price, 'DEMOTED_BY_BRAIN', exchange, risk, telegram, autotune)
                         continue
                     elif brain_action == "HARD_CAP":
                         logger.info(f"🧠 Hold brain: HARD_CAP {symbol} (max {settings.HOLD_BRAIN_MAX_HOLD_HOURS}h)")
-                        await close_position_async(pos, current_price, 'HARD_CAP', exchange, risk, telegram)
+                        await close_position_async(pos, current_price, 'HARD_CAP', exchange, risk, telegram, autotune)
                         continue
                     elif brain_action == "PROMOTED":
                         await risk.update_position_async(updated_pos)
@@ -370,7 +373,7 @@ async def manage_positions_loop(
                     # Check stop-loss
                     if (side == 'long' and current_price <= stop_loss) or \
                        (side == 'short' and current_price >= stop_loss):
-                        await close_position_async(pos, current_price, 'STOP_LOSS', exchange, risk, telegram)
+                        await close_position_async(pos, current_price, 'STOP_LOSS', exchange, risk, telegram, autotune)
                         continue
 
                     # Check take-profit targets
@@ -378,17 +381,17 @@ async def manage_positions_loop(
                     tp_2r = pos.get('tp_2r')
 
                     if tp_4r and side == 'long' and current_price >= tp_4r:
-                        await close_position_async(pos, current_price, 'TP_4R', exchange, risk, telegram)
+                        await close_position_async(pos, current_price, 'TP_4R', exchange, risk, telegram, autotune)
                         continue
                     elif tp_2r and side == 'long' and current_price >= tp_2r:
-                        await close_position_async(pos, current_price, 'TP_2R', exchange, risk, telegram)
+                        await close_position_async(pos, current_price, 'TP_2R', exchange, risk, telegram, autotune)
                         continue
 
                     # Check deadline (replaces old max_hold_hours check)
                     # Note: deadline_ts is now managed by hold brain, which can extend it
                     deadline_ts = pos.get('deadline_ts')
                     if deadline_ts and time.time() >= deadline_ts:
-                        await close_position_async(pos, current_price, 'DEADLINE_EXPIRED', exchange, risk, telegram)
+                        await close_position_async(pos, current_price, 'DEADLINE_EXPIRED', exchange, risk, telegram, autotune)
                         continue
 
                 except Exception as e:
@@ -409,6 +412,7 @@ async def daily_digest_loop(
     risk: AsyncRiskEngine,
     telegram: AsyncTelegram,
     settings,
+    autotune: 'AutoTunePro' = None,
 ):
     """
     Send daily digest at configured hour (UTC).
@@ -452,6 +456,18 @@ async def daily_digest_loop(
                     f"Open Positions: {digest['open_positions']}"
                 )
 
+                # Add AutoTune snapshot if available
+                if autotune:
+                    snap = autotune.snapshot()
+                    msg += (
+                        f"\n\n🤖 AutoTune Pro\n"
+                        f"Signals/hr: {snap['signals_per_hour']}  Slip(p95): {snap['p95_slip_bps']}bps\n"
+                        f"IOC Rej: {int(100*snap['ioc_reject_rate'])}%  AvgR: {snap['avgR']:.2f}  Win: {int(100*snap['winrate'])}%\n"
+                        f"RET5M: {snap['EARLY_RET_5M_MIN']:.4f}  VSpk: {snap['EARLY_VOL_SPIKE_MIN']:.2f}\n"
+                        f"Score: {snap['MIN_SCORE']}  Risk: {snap['RISK_PER_TRADE']:.4f}\n"
+                        f"Test Mode: {snap['LIVE_TEST_MODE']}"
+                    )
+
                 await telegram.send(msg)
                 logger.info(f"Daily digest sent for {current_date}")
                 last_digest_date = current_date
@@ -471,6 +487,7 @@ async def close_position_async(
     exchange: AsyncExchange,
     risk: AsyncRiskEngine,
     telegram: AsyncTelegram,
+    autotune: 'AutoTunePro' = None,
 ):
     """
     Close a position and record the trade.
@@ -526,6 +543,10 @@ async def close_position_async(
 
     # Phase 1.1: Set cooldown for this symbol
     await risk.set_symbol_cooldown(symbol)
+
+    # Feed R-multiple to AutoTune Pro
+    if autotune:
+        autotune.on_trade_closed(r_multiple)
 
     # Notify
     if telegram:
@@ -592,6 +613,11 @@ async def main():
     try:
         # Load settings
         settings = get_settings()
+
+        # Load runtime overrides (persisted changes survive restarts)
+        logger.info("Loading runtime overrides...")
+        overlay = RuntimeSettings(settings, path="./data/overrides.json", log=logger)
+        overlay.load()
 
         logger.info("=" * 80)
         logger.info("🚀 Alpha Sniper v4.2 - ASYNC TRADING BOT")
@@ -693,6 +719,11 @@ async def main():
         pump_engine = PumpEngine(pump_config, logger)
         logger.info("Pump engine initialized")
 
+        # Initialize AutoTune Pro
+        logger.info("Initializing AutoTune Pro...")
+        autotune = AutoTunePro(settings, overlay, logger)
+        logger.info(f"AutoTune Pro initialized (enabled: {settings.AUTOTUNE_ENABLE})")
+
         # Initialize caches
         universe_cache = {}
         market_data_cache = MarketDataCache(ttl_seconds=settings.MARKET_DATA_CACHE_TTL)
@@ -703,9 +734,9 @@ async def main():
         logger.info("=" * 80)
 
         # Start background tasks
-        position_task = asyncio.create_task(manage_positions_loop(exchange, risk, telegram))
+        position_task = asyncio.create_task(manage_positions_loop(exchange, risk, telegram, autotune))
         reconcile_task = asyncio.create_task(reconciliation_loop(exchange, risk, telegram))
-        digest_task = asyncio.create_task(daily_digest_loop(risk, telegram, settings))
+        digest_task = asyncio.create_task(daily_digest_loop(risk, telegram, settings, autotune))
 
         # Main trading loop - aligned to closed 1-minute candles
         scan_count = 0
@@ -751,6 +782,9 @@ async def main():
 
                 logger.info(f"Signals generated: {len(signals)}")
 
+                # Feed signal count to AutoTune Pro
+                autotune.on_scan(len(signals))
+
                 if signals:
                     for sig in signals[:5]:  # Log first 5
                         logger.info(
@@ -767,6 +801,11 @@ async def main():
 
                 # Step 5: Save equity snapshot
                 await risk.save_equity_snapshot_async(exchange)
+
+                # Step 6: Run AutoTune adjustments
+                autotune.maybe_tune()
+                autotune.maybe_sizing_autopilot()
+                autotune.maybe_flip_live_test_off()
 
             except asyncio.CancelledError:
                 logger.info("Trading loop cancelled")

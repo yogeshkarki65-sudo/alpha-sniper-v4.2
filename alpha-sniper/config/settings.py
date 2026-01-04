@@ -102,6 +102,37 @@ class Settings(BaseSettings):
     WICK_FILTER_ATR_MULT: float = Field(default=2.0, ge=0.5, description="ATR multiplier for wick detection")
     MIN_DEPTH_USD_ABSOLUTE: float = Field(default=25000.0, ge=0, description="Absolute minimum depth floor ($25k)")
 
+    # === AUTOTUNE PRO (flow-based threshold adjustment) ===
+    AUTOTUNE_ENABLE: bool = Field(default=True, description="Enable AutoTune Pro")
+    AUTOTUNE_WINDOW_SCANS: int = Field(default=60, ge=10, description="Number of recent scans to consider (~1h if 60s scans)")
+    AUTOTUNE_TARGET_MIN_HOURLY: int = Field(default=1, ge=0, description="Minimum target signals per hour")
+    AUTOTUNE_TARGET_MAX_HOURLY: int = Field(default=8, ge=1, description="Maximum target signals per hour")
+    AUTOTUNE_STEP_RET5M: float = Field(default=0.001, ge=0.0001, description="Step size for RET5M adjustments (±0.10%)")
+    AUTOTUNE_STEP_VSPIKE: float = Field(default=0.10, ge=0.01, description="Step size for volume spike adjustments (±0.10x)")
+    AUTOTUNE_STEP_SCORE: int = Field(default=1, ge=1, description="Step size for score adjustments (±1)")
+    AUTOTUNE_RET5M_BOUNDS: tuple[float, float] = Field(default=(0.008, 0.035), description="RET5M bounds (0.8%..3.5%)")
+    AUTOTUNE_VSPIKE_BOUNDS: tuple[float, float] = Field(default=(1.10, 4.00), description="Volume spike bounds (1.1x..4.0x)")
+    AUTOTUNE_SCORE_BOUNDS: tuple[int, int] = Field(default=(3, 40), description="Score bounds (3..40)")
+    AUTOTUNE_COOLDOWN_SCANS: int = Field(default=5, ge=1, description="Minimum scans between adjustments")
+
+    # === SIZING AUTOPILOT ===
+    SIZING_AUTOPILOT_ENABLE: bool = Field(default=True, description="Enable sizing autopilot")
+    SIZING_WINDOW_TRADES: int = Field(default=20, ge=5, description="Number of recent trades to consider")
+    SIZING_UP_AVG_R_MIN: float = Field(default=0.60, description="Increase size if avg R >= this")
+    SIZING_UP_WINRATE_MIN: float = Field(default=0.52, ge=0.0, le=1.0, description="Increase size if winrate >= this")
+    SIZING_DOWN_AVG_R_MAX: float = Field(default=-0.25, description="Decrease size if avg R <= this")
+    SIZING_RISK_STEP: float = Field(default=0.00025, ge=0.00001, description="Risk adjustment step (0.025%)")
+    SIZING_RISK_MIN: float = Field(default=0.0025, ge=0.0001, description="Minimum risk per trade (0.25%)")
+    SIZING_RISK_MAX: float = Field(default=0.0100, ge=0.001, description="Maximum risk per trade (1.0%)")
+
+    # === LIVE FLIP GUARDRAILS ===
+    LIVE_FLIP_ENABLE: bool = Field(default=True, description="Enable automatic LIVE_TEST_MODE flip")
+    LIVE_FLIP_MIN_TRADES: int = Field(default=20, ge=5, description="Minimum trades before considering flip")
+    LIVE_FLIP_MIN_AVG_R: float = Field(default=0.60, description="Minimum average R-multiple to flip")
+    LIVE_FLIP_MIN_WINRATE: float = Field(default=0.55, ge=0.0, le=1.0, description="Minimum winrate to flip")
+    LIVE_FLIP_MAX_P95_SLIP_BPS: int = Field(default=40, ge=1, description="Maximum p95 slippage in bps (0.40%)")
+    LIVE_FLIP_MAX_IOC_REJECT_RATE: float = Field(default=0.15, ge=0.0, le=1.0, description="Maximum IOC reject rate")
+
     # === PHASE 1.1: DIGEST & TRACKING ===
     DIGEST_ENABLE: bool = Field(default=True, description="Enable daily Telegram digest")
     DIGEST_HOUR_UTC: int = Field(default=0, ge=0, le=23, description="Daily digest hour (UTC, 0 = midnight)")
