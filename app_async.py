@@ -855,7 +855,7 @@ async def main():
                 except Exception:
                     pass
 
-                signals = pump_engine.generate_signals(market_data, regime=current_regime)
+                signals = pump_engine.generate_signals(market_data, regime='SIDEWAYS')
 
                 logger.info(f"Signals generated: {len(signals)}")
 
