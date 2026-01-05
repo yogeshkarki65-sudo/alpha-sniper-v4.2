@@ -62,6 +62,8 @@ class AutoTunePro:
         # Flow loosen/restore counters
         self._quiet_scans = 0
         self._restore_scans = 0
+        self._quiet_scans_2 = 0
+        self._accel_forced_off = False
 
     # === HOOKS (called by main loop) ===
 
@@ -298,11 +300,28 @@ class AutoTunePro:
                     )
 
                 self._quiet_scans = 0
+                self._quiet_scans_2 += 1
+
+            # Second notch: toggle accel off + relax depth multiple (bounded)
+            if self._quiet_scans_2 >= 1 and self.s.AUTO_ACCEL_TOGGLE:
+                if bool(getattr(self.s, "EARLY_ACCEL_REQUIRED", True)):
+                    self.ovr.set("EARLY_ACCEL_REQUIRED", False)
+                    self._accel_forced_off = True
+                    self.log.info("[FLOW_TOGGLE] accel_required=False (floor & quiet)")
+
+            if self._quiet_scans_2 * self.s.FLOW_QUIET_SCANS >= self.s.FLOW_QUIET_SCANS_2:
+                current_mult = float(getattr(self.s, "MIN_DEPTH_MULTIPLE", 200.0))
+                new_mult = max(self.s.LOOSEN2_MIN_DEPTH_MULTIPLE_MIN, current_mult - 40.0)
+                if new_mult != current_mult:
+                    self.ovr.set("MIN_DEPTH_MULTIPLE", new_mult)
+                    self.log.info(f"[FLOW_LOOSEN] depth_multiple>={new_mult:.0f}")
+                self._quiet_scans_2 = 0
 
         # Flow healthy → Restore toward baseline
         elif per_hour > self.s.AUTOTUNE_TARGET_MIN_HOURLY:
             self._restore_scans += 1
             self._quiet_scans = 0
+            self._quiet_scans_2 = 0
 
             if self._restore_scans >= self.s.FLOW_RESTORE_SCANS:
                 # Restore volume floor toward baseline
@@ -331,6 +350,12 @@ class AutoTunePro:
                 if new_depth != self.s.MIN_DEPTH_USD_ABSOLUTE:
                     self.ovr.set("MIN_DEPTH_USD_ABSOLUTE", new_depth)
                     changed = True
+
+                # Restore accel requirement if it was forced off
+                if self._accel_forced_off and self.s.AUTO_ACCEL_TOGGLE:
+                    self.ovr.set("EARLY_ACCEL_REQUIRED", True)
+                    self._accel_forced_off = False
+                    self.log.info("[FLOW_TOGGLE] accel_required=True (flow restored)")
 
                 if changed:
                     self.log.info(

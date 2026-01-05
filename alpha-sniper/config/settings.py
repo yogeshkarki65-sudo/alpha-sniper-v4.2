@@ -143,6 +143,11 @@ class Settings(BaseSettings):
     LOOSEN_MIN_DEPTH_USD_ABS_STEP: float = Field(default=2000.0, ge=100.0, description="Depth step when loosening")
     LOOSEN_MIN_DEPTH_USD_ABS_MIN: float = Field(default=8000.0, ge=1000.0, description="Minimum depth floor")
 
+    # === FLOW LOOSEN SECOND NOTCH (extreme quiet markets) ===
+    FLOW_QUIET_SCANS_2: int = Field(default=60, ge=10, description="Extended quiet scans before second notch")
+    LOOSEN2_MIN_DEPTH_MULTIPLE_MIN: float = Field(default=120.0, ge=10.0, description="Minimum depth multiple floor")
+    AUTO_ACCEL_TOGGLE: bool = Field(default=True, description="Auto-toggle EARLY_ACCEL_REQUIRED at floor")
+
     # === PHASE 1.1: DIGEST & TRACKING ===
     DIGEST_ENABLE: bool = Field(default=True, description="Enable daily Telegram digest")
     DIGEST_HOUR_UTC: int = Field(default=0, ge=0, le=23, description="Daily digest hour (UTC, 0 = midnight)")

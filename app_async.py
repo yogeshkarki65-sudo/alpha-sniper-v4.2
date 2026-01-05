@@ -777,6 +777,25 @@ async def main():
 
                 logger.info(f"Market data fetched: {len(market_data)}/{len(symbols)} symbols")
 
+                # Build feature snapshot for near-miss visibility when signals=0
+                _features = []
+                try:
+                    for _sym, _d in (market_data or {}).items():
+                        _f = (_d or {}).get("features", {})
+                        _features.append({
+                            "symbol": _sym,
+                            "ret5m": float(_f.get("ret_5m", 0.0)),
+                            "vspike": float(_f.get("rvol_1m_vs20", 0.0)),
+                            "score": float(_f.get("pump_score", 0.0)),
+                            "accel": bool(_f.get("accel", False)),
+                            "wick": bool(_f.get("wick_flag", False)),
+                            "depth": float(_f.get("depth_usd", 0.0)),
+                        })
+                    _features.sort(key=lambda r: (r["ret5m"]*100 + r["vspike"]*5 + r["score"]), reverse=True)
+                except Exception as _e:
+                    logger.warning(f"Feature snapshot failed: {_e}")
+                    _features = []
+
                 # Step 3: Generate signals from pump engine
                 signals = pump_engine.generate_signals(market_data, regime='SIDEWAYS')
 
@@ -784,6 +803,18 @@ async def main():
 
                 # Feed signal count to AutoTune Pro
                 autotune.on_scan(len(signals))
+
+                # Log top 3 near-miss candidates when no signals
+                if not signals and _features:
+                    try:
+                        for _row in _features[:3]:
+                            logger.info(
+                                "[EARLY_TOP] %s ret5m=%.2f%% vspike=%.2f score=%.1f accel=%s wick=%s depth=$%.0f",
+                                _row["symbol"], _row["ret5m"]*100.0, _row["vspike"], _row["score"],
+                                _row["accel"], _row["wick"], _row["depth"]
+                            )
+                    except Exception:
+                        pass
 
                 if signals:
                     for sig in signals[:5]:  # Log first 5
