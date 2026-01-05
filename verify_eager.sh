@@ -69,11 +69,17 @@ echo ""
 # 3. Check EAGER settings
 print_header "3" "EAGER Configuration"
 
-python3 <<EOF
+PYTHONPATH=/opt/alpha-sniper python3 <<'EOF'
 import sys
 sys.path.insert(0, '/opt/alpha-sniper')
 try:
-    from alpha_sniper.config.settings import Settings
+    # Import from the alpha-sniper directory structure
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("settings", "/opt/alpha-sniper/alpha-sniper/config/settings.py")
+    settings_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(settings_module)
+
+    Settings = settings_module.Settings
     s = Settings()
 
     print(f"  EAGER_ENABLE: {s.EAGER_ENABLE} {'✓' if s.EAGER_ENABLE else '✗ (disabled)'}")
@@ -102,6 +108,8 @@ try:
 
 except Exception as e:
     print(f"  ✗ Failed to load settings: {e}")
+    import traceback
+    traceback.print_exc()
     sys.exit(1)
 EOF
 
@@ -195,11 +203,16 @@ echo "╚═══════════════════════�
 echo ""
 
 # Overall status
-python3 <<EOF
+PYTHONPATH=/opt/alpha-sniper python3 <<'EOF'
 import sys
 sys.path.insert(0, '/opt/alpha-sniper')
-from alpha_sniper.config.settings import Settings
+import importlib.util
 
+spec = importlib.util.spec_from_file_location("settings", "/opt/alpha-sniper/alpha-sniper/config/settings.py")
+settings_module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(settings_module)
+
+Settings = settings_module.Settings
 s = Settings()
 live_test = getattr(s, 'LIVE_TEST_MODE', True)
 
