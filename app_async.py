@@ -828,7 +828,6 @@ async def main():
 
                 # --- Lightweight depth snapshot for top-K (cached) ---
                 try:
-                    import time
                     _now = time.time()
                     _k   = int(getattr(settings, "SNAPSHOT_DEPTH_TOPK", 3))
                     _ttl = int(getattr(settings, "SNAPSHOT_DEPTH_CACHE_SEC", 20))
@@ -917,8 +916,7 @@ async def main():
                                     logger.info(f"[EAGER] {sym} rejected by validate_order: {why}")
                                     continue
                                 qty = size_usd / entry_px
-                                import time as _t
-                                client_oid = f"alpha-eager-{sym}-{int(_t.time()*1000)}"
+                                client_oid = f"alpha-eager-{sym}-{int(time.time()*1000)}"
                                 try:
                                     order = await exchange.create_order_idempotent(
                                         symbol=sym,
@@ -939,7 +937,7 @@ async def main():
                                         "entry_price": entry_px, "stop_loss": sl_price,
                                         "tp_2r": tp, "tp_4r": tp,
                                         "qty": qty, "size_usd": size_usd,
-                                        "timestamp_open": int(_t.time()),
+                                        "timestamp_open": int(time.time()),
                                         "max_hold_hours": max(0.25, float(getattr(settings, "HOLD_BRAIN_MAX_HOLD_HOURS", 8.0)))
                                     }
                                     await risk.add_position_async(pos)
