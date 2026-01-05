@@ -88,6 +88,7 @@ async def fetch_symbol_data(
 
         return symbol, {
             "df": df,
+            "ohlcv": ohlcv,  # Store raw OHLCV for EAGER breakout logic
             "indicators": indicator_dict,
             "fetch_time_ms": fetch_time_ms,
             "timeframe": timeframe,

@@ -776,55 +776,87 @@ async def main():
                 )
 
                 logger.info(f"Market data fetched: {len(market_data)}/{len(symbols)} symbols")
+                # --- Feature extraction (from raw OHLCV) ---
+                def _features_from_ohlcv(ohlcv, wick_mult: float):
+                    try:
+                        if not ohlcv or len(ohlcv) < 25:
+                            return {"ret_5m": 0.0, "rvol_1m_vs20": 0.0, "accel": False, "wick_flag": False}
+                        closes = [float(x[4]) for x in ohlcv]
+                        vols   = [float(x[5]) for x in ohlcv]
+                        c_last, c_first5 = closes[-1], closes[-5]
+                        ret5m = (c_last / c_first5) - 1.0
+                        v_last = vols[-1]
+                        v_avg20 = (sum(vols[-21:-1]) / 20.0) if len(vols) >= 21 else max(sum(vols)/max(len(vols),1), 1e-9)
+                        vspike = (v_last / v_avg20) if v_avg20 > 0 else 0.0
+                        accel = closes[-1] > closes[-2]
+                        highs = [float(x[2]) for x in ohlcv]
+                        lows  = [float(x[3]) for x in ohlcv]
+                        trs=[]
+                        for i in range(-15, -1):
+                            h,l,pc = highs[i], lows[i], closes[i-1]
+                            trs.append(max(h-l, abs(h-pc), abs(l-pc)))
+                        atr14 = (sum(trs)/14.0) if trs else 0.0
+                        o_last = float(ohlcv[-1][1])
+                        body_top = max(o_last, c_last)
+                        wick_flag = (atr14>0.0) and ((highs[-1] - body_top) >= wick_mult * atr14)
+                        return {"ret_5m": ret5m, "rvol_1m_vs20": vspike, "accel": accel, "wick_flag": wick_flag}
+                    except Exception:
+                        return {"ret_5m": 0.0, "rvol_1m_vs20": 0.0, "accel": False, "wick_flag": False}
 
-                # Build feature snapshot for near-miss visibility when signals=0
-                _features = []
+                wick_mult_cfg = float(getattr(settings, "WICK_FILTER_ATR_MULT", 2.0))
+                _rows = []
+                for _sym, _d in (market_data or {}).items():
+                    _f = (_d or {}).get("features") or {}
+                    if "ret_5m" not in _f or "rvol_1m_vs20" not in _f:
+                        _calc = _features_from_ohlcv((_d or {}).get("ohlcv") or [], wick_mult_cfg)
+                        _f.update(_calc)
+                        # simple composite for sorting visibility
+                        _f.setdefault("pump_score", (_calc["ret_5m"]*100.0) + max((_calc["rvol_1m_vs20"]-1.0)*10.0, 0.0))
+                        (_d or {})["features"] = _f
+                        market_data[_sym] = _d
+                    _rows.append({
+                        "symbol": _sym,
+                        "ret5m": float(_f.get("ret_5m", 0.0)),
+                        "vspike": float(_f.get("rvol_1m_vs20", 0.0)),
+                        "score": float(_f.get("pump_score", 0.0)),
+                        "accel": bool(_f.get("accel", False)),
+                        "wick":  bool(_f.get("wick_flag", False)),
+                        "depth": float((_d or {}).get("depth_usd", 0.0)),
+                    })
+                # Highest "energy" at top for near-miss visibility
+                _rows.sort(key=lambda r: (r["ret5m"]*100 + r["vspike"]*5 + r["score"]), reverse=True)
+
+                # --- Lightweight depth snapshot for top-K (cached) ---
                 try:
-                    for _sym, _d in (market_data or {}).items():
-                        if not _d or "df" not in _d:
-                            continue
+                    import time
+                    _now = time.time()
+                    _k   = int(getattr(settings, "SNAPSHOT_DEPTH_TOPK", 3))
+                    _ttl = int(getattr(settings, "SNAPSHOT_DEPTH_CACHE_SEC", 20))
+                    if _k > 0:
+                        for _r in _rows[:_k]:
+                            sym = _r["symbol"]
+                            md  = market_data.get(sym) or {}
+                            if md.get("_depth_ts") and (_now - md["_depth_ts"] < _ttl):
+                                continue
+                            try:
+                                ob = await exchange.fetch_order_book(sym)
+                                bids = ob.get("bids") or []; asks = ob.get("asks") or []
+                                def _depth_usd(levels):
+                                    total = 0.0
+                                    for px, qty in levels[:10]:
+                                        total += float(px) * float(qty)
+                                    return total
+                                depth_usd = min(_depth_usd(bids), _depth_usd(asks))
+                                md["depth_usd"] = depth_usd
+                                md["_depth_ts"] = _now
+                                market_data[sym] = md
+                                _r["depth"] = depth_usd
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
 
-                        _df = _d["df"]
-                        if _df.empty or len(_df) < 20:
-                            continue
-
-                        # Extract OHLCV data
-                        _close = _df["close"]
-                        _vol = _df["volume"]
-
-                        # Calculate 5-minute return (last 6 candles on 1m chart)
-                        _c_now = float(_close.iloc[-1])
-                        _c_5m_ago = float(_close.iloc[-6]) if len(_close) >= 6 else float(_close.iloc[0])
-                        _ret_5m = (_c_now / _c_5m_ago) - 1.0 if _c_5m_ago > 0 else 0.0
-
-                        # Calculate volume spike (last candle vs 20-candle avg)
-                        _v_last = float(_vol.iloc[-1])
-                        _v_avg_20 = float(_vol.iloc[-20:].mean()) if len(_vol) >= 20 else _v_last
-                        _vspike = _v_last / _v_avg_20 if _v_avg_20 > 0 else 0.0
-
-                        # Calculate acceleration (close[n] > close[n-1])
-                        _accel = _c_now > float(_close.iloc[-2]) if len(_close) >= 2 else False
-
-                        # Simple score approximation (ret5m * 100 + vspike * 10)
-                        _score = (_ret_5m * 100) + (_vspike * 10)
-
-                        _features.append({
-                            "symbol": _sym,
-                            "ret5m": _ret_5m,
-                            "vspike": _vspike,
-                            "score": _score,
-                            "accel": _accel,
-                            "wick": False,  # Wick detection requires more complex logic
-                            "depth": 0.0,   # Depth requires orderbook data
-                        })
-
-                    _features.sort(key=lambda r: (r["ret5m"]*100 + r["vspike"]*5 + r["score"]), reverse=True)
-                except Exception as _e:
-                    logger.warning(f"Feature snapshot failed: {_e}")
-                    _features = []
-
-                # Step 3: Generate signals from pump engine
-                signals = pump_engine.generate_signals(market_data, regime='SIDEWAYS')
+                signals = pump_engine.generate_signals(market_data, regime=current_regime)
 
                 logger.info(f"Signals generated: {len(signals)}")
 
@@ -832,9 +864,9 @@ async def main():
                 autotune.on_scan(len(signals))
 
                 # Log top 3 near-miss candidates when no signals
-                if not signals and _features:
+                if not signals:
                     try:
-                        for _row in _features[:3]:
+                        for _row in _rows[:3]:
                             logger.info(
                                 "[EARLY_TOP] %s ret5m=%.2f%% vspike=%.2f score=%.1f accel=%s wick=%s depth=$%.0f",
                                 _row["symbol"], _row["ret5m"]*100.0, _row["vspike"], _row["score"],
@@ -842,6 +874,79 @@ async def main():
                             )
                     except Exception:
                         pass
+
+                # --- EAGER breakout entry path (optional, LIVE_TEST gated by default) ---
+                eager_opened = 0
+                if getattr(settings, "EAGER_ENABLE", True) and (eager_opened < int(settings.EAGER_MAX_PER_SCAN)):
+                    if (not getattr(settings, "EAGER_ONLY_LIVE_TEST", True)) or bool(getattr(settings, "LIVE_TEST_MODE", True)):
+                        try:
+                            for row in _rows:
+                                if eager_opened >= int(settings.EAGER_MAX_PER_SCAN):
+                                    break
+                                # Arm conditions: big vspike & not too negative over 5m; must not be a wick
+                                if row["vspike"] < float(settings.EAGER_VSPIKE_MIN):
+                                    continue
+                                if row["ret5m"] < float(settings.EAGER_MAX_NEG_RET5M):
+                                    continue
+                                if row["wick"]:
+                                    continue
+                                if getattr(settings, "EAGER_REQUIRE_ACCEL", False) and (not row["accel"]):
+                                    continue
+                                sym = row["symbol"]
+                                md = market_data.get(sym) or {}
+                                ohlcv = md.get("ohlcv") or []
+                                if len(ohlcv) < max(6, int(settings.EAGER_LOOKBACK_HIGH_N) + 1):
+                                    continue
+                                highs = [float(x[2]) for x in ohlcv]
+                                lastN = int(settings.EAGER_LOOKBACK_HIGH_N)
+                                lookback_high = max(highs[-(lastN+1):-1])
+                                trigger = lookback_high * (1.0 + float(settings.EAGER_EPS_PCT))
+                                last_close = float(ohlcv[-1][4])
+                                entry_px = max(trigger, last_close)
+
+                                # position sizing with tight SL
+                                sl_price = entry_px * (1.0 - float(settings.EAGER_SL_PCT))
+                                size_usd = await risk.calculate_position_size_async(
+                                    {"symbol": sym, "side": "long", "engine": "pump"},
+                                    entry_px, sl_price
+                                )
+                                if size_usd < float(settings.MIN_VIABLE_TRADE_USD):
+                                    continue
+                                valid, why, det = await exchange.validate_order(sym, size_usd, entry_px)
+                                if not valid:
+                                    logger.info(f"[EAGER] {sym} rejected by validate_order: {why}")
+                                    continue
+                                qty = size_usd / entry_px
+                                import time as _t
+                                client_oid = f"alpha-eager-{sym}-{int(_t.time()*1000)}"
+                                try:
+                                    order = await exchange.create_order_idempotent(
+                                        symbol=sym,
+                                        side="buy",
+                                        order_type="limit",
+                                        amount=qty,
+                                        price=entry_px,
+                                        params={"timeInForce": "IOC"},
+                                        client_oid=client_oid
+                                    )
+                                except Exception as e:
+                                    logger.info(f"[EAGER] {sym} create_order failed: {e}")
+                                    continue
+                                if order and order.get("id"):
+                                    tp = entry_px * (1.0 + float(settings.EAGER_TP_PCT))
+                                    pos = {
+                                        "symbol": sym, "side": "long", "engine": "pump",
+                                        "entry_price": entry_px, "stop_loss": sl_price,
+                                        "tp_2r": tp, "tp_4r": tp,
+                                        "qty": qty, "size_usd": size_usd,
+                                        "timestamp_open": int(_t.time()),
+                                        "max_hold_hours": max(0.25, float(getattr(settings, "HOLD_BRAIN_MAX_HOLD_HOURS", 8.0)))
+                                    }
+                                    await risk.add_position_async(pos)
+                                    logger.info(f"[EAGER] OPENED {sym} @ {entry_px:.8f} size=${size_usd:.2f} tp={tp:.8f} sl={sl_price:.8f}")
+                                    eager_opened += 1
+                        except Exception as e:
+                            logger.info(f"[EAGER] pipeline error: {e}")
 
                 if signals:
                     for sig in signals[:5]:  # Log first 5
