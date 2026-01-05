@@ -876,11 +876,12 @@ async def main():
 
                 # --- EAGER breakout entry path (optional, LIVE_TEST gated by default) ---
                 eager_opened = 0
-                if getattr(settings, "EAGER_ENABLE", True) and (eager_opened < int(settings.EAGER_MAX_PER_SCAN)):
+                eager_max_per_scan = int(getattr(settings, "EAGER_MAX_PER_SCAN", 1))
+                if getattr(settings, "EAGER_ENABLE", True) and (eager_opened < eager_max_per_scan):
                     if (not getattr(settings, "EAGER_ONLY_LIVE_TEST", True)) or bool(getattr(settings, "LIVE_TEST_MODE", True)):
                         try:
                             for row in _rows:
-                                if eager_opened >= int(settings.EAGER_MAX_PER_SCAN):
+                                if eager_opened >= eager_max_per_scan:
                                     break
                                 # Arm conditions: big vspike & not too negative over 5m; must not be a wick
                                 if row["vspike"] < float(settings.EAGER_VSPIKE_MIN):
@@ -894,11 +895,11 @@ async def main():
                                 sym = row["symbol"]
                                 md = market_data.get(sym) or {}
                                 ohlcv = md.get("ohlcv") or []
-                                if len(ohlcv) < max(6, int(settings.EAGER_LOOKBACK_HIGH_N) + 1):
+                                lookback_n = int(getattr(settings, "EAGER_LOOKBACK_HIGH_N", 5))
+                                if len(ohlcv) < max(6, lookback_n + 1):
                                     continue
                                 highs = [float(x[2]) for x in ohlcv]
-                                lastN = int(settings.EAGER_LOOKBACK_HIGH_N)
-                                lookback_high = max(highs[-(lastN+1):-1])
+                                lookback_high = max(highs[-(lookback_n+1):-1])
                                 trigger = lookback_high * (1.0 + float(settings.EAGER_EPS_PCT))
                                 last_close = float(ohlcv[-1][4])
                                 entry_px = max(trigger, last_close)
