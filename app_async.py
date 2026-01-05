@@ -781,16 +781,43 @@ async def main():
                 _features = []
                 try:
                     for _sym, _d in (market_data or {}).items():
-                        _f = (_d or {}).get("features", {})
+                        if not _d or "df" not in _d:
+                            continue
+
+                        _df = _d["df"]
+                        if _df.empty or len(_df) < 20:
+                            continue
+
+                        # Extract OHLCV data
+                        _close = _df["close"]
+                        _vol = _df["volume"]
+
+                        # Calculate 5-minute return (last 6 candles on 1m chart)
+                        _c_now = float(_close.iloc[-1])
+                        _c_5m_ago = float(_close.iloc[-6]) if len(_close) >= 6 else float(_close.iloc[0])
+                        _ret_5m = (_c_now / _c_5m_ago) - 1.0 if _c_5m_ago > 0 else 0.0
+
+                        # Calculate volume spike (last candle vs 20-candle avg)
+                        _v_last = float(_vol.iloc[-1])
+                        _v_avg_20 = float(_vol.iloc[-20:].mean()) if len(_vol) >= 20 else _v_last
+                        _vspike = _v_last / _v_avg_20 if _v_avg_20 > 0 else 0.0
+
+                        # Calculate acceleration (close[n] > close[n-1])
+                        _accel = _c_now > float(_close.iloc[-2]) if len(_close) >= 2 else False
+
+                        # Simple score approximation (ret5m * 100 + vspike * 10)
+                        _score = (_ret_5m * 100) + (_vspike * 10)
+
                         _features.append({
                             "symbol": _sym,
-                            "ret5m": float(_f.get("ret_5m", 0.0)),
-                            "vspike": float(_f.get("rvol_1m_vs20", 0.0)),
-                            "score": float(_f.get("pump_score", 0.0)),
-                            "accel": bool(_f.get("accel", False)),
-                            "wick": bool(_f.get("wick_flag", False)),
-                            "depth": float(_f.get("depth_usd", 0.0)),
+                            "ret5m": _ret_5m,
+                            "vspike": _vspike,
+                            "score": _score,
+                            "accel": _accel,
+                            "wick": False,  # Wick detection requires more complex logic
+                            "depth": 0.0,   # Depth requires orderbook data
                         })
+
                     _features.sort(key=lambda r: (r["ret5m"]*100 + r["vspike"]*5 + r["score"]), reverse=True)
                 except Exception as _e:
                     logger.warning(f"Feature snapshot failed: {_e}")

@@ -65,6 +65,37 @@ class AutoTunePro:
         self._quiet_scans_2 = 0
         self._accel_forced_off = False
 
+        # Check if we're already at max loosening + floor on startup → trigger second notch immediately
+        self._check_startup_second_notch()
+
+    def _check_startup_second_notch(self):
+        """
+        Check if we're already at max loosening + floor thresholds on startup.
+        If so, immediately trigger second notch (accel toggle) without waiting for FLOW_LOOSEN.
+        """
+        if not self.s.AUTO_ACCEL_TOGGLE:
+            return
+
+        # Check if already at max loosening
+        at_max = (
+            self.s.UNIVERSE_SIZE >= self.s.LOOSEN_UNIVERSE_SIZE_MAX and
+            self.s.UNIVERSE_MIN_QUOTE_VOLUME <= self.s.LOOSEN_UNIVERSE_MIN_QUOTE_VOLUME_MIN
+        )
+
+        # Check if at threshold floor
+        at_floor = (
+            abs(self.s.EARLY_RET_5M_MIN - self.s.AUTOTUNE_RET5M_BOUNDS[0]) < 1e-9 and
+            self.s.MIN_SCORE <= self.s.AUTOTUNE_SCORE_BOUNDS[0]
+        )
+
+        # If at max+floor and accel is still on → toggle it off immediately
+        if at_max and at_floor:
+            if bool(getattr(self.s, "EARLY_ACCEL_REQUIRED", True)):
+                self.ovr.set("EARLY_ACCEL_REQUIRED", False)
+                self._accel_forced_off = True
+                self._quiet_scans_2 = 1  # Mark second notch as triggered
+                self.log.info("[FLOW_TOGGLE] accel_required=False (startup at max+floor)")
+
     # === HOOKS (called by main loop) ===
 
     def on_scan(self, signals_count: int):
