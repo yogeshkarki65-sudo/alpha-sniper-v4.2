@@ -379,12 +379,12 @@ class AsyncExchange:
 
         # Round to exchange precision
         amt = (
-            round(amount, prec.get('amount', 8))
+            round(amount, int(prec.get('amount', 8)))
             if prec.get('amount') is not None
             else amount
         )
         prc = (
-            round(price, prec.get('price', 8))
+            round(price, int(prec.get('price', 8)))
             if prec.get('price') is not None
             else price
         )
