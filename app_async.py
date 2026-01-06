@@ -917,7 +917,9 @@ async def main():
                                     logger.info(f"[EAGER] {sym} rejected by validate_order: {why}")
                                     continue
                                 qty = size_usd / entry_px
-                                client_oid = f"alpha-eager-{sym}-{int(time.time()*1000)}"
+                                # Sanitize symbol for client order ID (remove illegal chars)
+                                safe_sym = sym.replace("/", "").replace("-", "")
+                                client_oid = f"eager-{safe_sym}-{int(time.time()*1000)}"
                                 try:
                                     order = await exchange.create_order_idempotent(
                                         symbol=sym,
