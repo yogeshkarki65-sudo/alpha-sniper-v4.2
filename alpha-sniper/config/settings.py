@@ -149,20 +149,20 @@ class Settings(BaseSettings):
     AUTO_ACCEL_TOGGLE: bool = Field(default=True, description="Auto-toggle EARLY_ACCEL_REQUIRED at floor")
 
     # -------- EAGER breakout (2nd entry path) --------
-    EAGER_ENABLE: bool = True                          # master switch
-    EAGER_VSPIKE_MIN: float = 3.0                      # need >= 3x volume spike
-    EAGER_MAX_NEG_RET5M: float = -0.003                # allow down to -0.3% over 5m
-    EAGER_LOOKBACK_HIGH_N: int = 5                     # breakout of last N highs
-    EAGER_EPS_PCT: float = 0.0008                      # +0.08% above lookback high
-    EAGER_SL_PCT: float = 0.008                        # 0.8% stop
-    EAGER_TP_PCT: float = 0.015                        # 1.5% target
-    EAGER_MAX_PER_SCAN: int = 1                        # at most 1 eager trade per scan
-    EAGER_REQUIRE_ACCEL: bool = False                  # accel not required for eager
-    EAGER_ONLY_LIVE_TEST: bool = True                  # safety: only with LIVE_TEST_MODE
+    EAGER_ENABLE: bool = Field(default=True, description="EAGER breakout master switch")
+    EAGER_VSPIKE_MIN: float = Field(default=3.0, ge=1.0, description="Minimum volume spike (3x)")
+    EAGER_MAX_NEG_RET5M: float = Field(default=-0.003, description="Allow down to -0.3% over 5m")
+    EAGER_LOOKBACK_HIGH_N: int = Field(default=5, ge=3, le=20, description="Breakout of last N highs")
+    EAGER_EPS_PCT: float = Field(default=0.0008, ge=0.0001, le=0.01, description="+0.08% above lookback high")
+    EAGER_SL_PCT: float = Field(default=0.008, ge=0.001, le=0.05, description="0.8% stop loss")
+    EAGER_TP_PCT: float = Field(default=0.015, ge=0.005, le=0.10, description="1.5% take profit")
+    EAGER_MAX_PER_SCAN: int = Field(default=1, ge=0, le=5, description="Max eager trades per scan")
+    EAGER_REQUIRE_ACCEL: bool = Field(default=False, description="Require acceleration for eager")
+    EAGER_ONLY_LIVE_TEST: bool = Field(default=True, description="Safety: only with LIVE_TEST_MODE")
 
     # -------- Near-miss depth snapshot (log only) --------
-    SNAPSHOT_DEPTH_TOPK: int = 3                       # fetch orderbook for top-K near misses
-    SNAPSHOT_DEPTH_CACHE_SEC: int = 20                 # cache TTL for the snapshot (sec)
+    SNAPSHOT_DEPTH_TOPK: int = Field(default=3, ge=0, le=10, description="Fetch orderbook for top-K near misses")
+    SNAPSHOT_DEPTH_CACHE_SEC: int = Field(default=20, ge=5, le=300, description="Cache TTL for snapshot (sec)")
 
     # === PHASE 1.1: DIGEST & TRACKING ===
     DIGEST_ENABLE: bool = Field(default=True, description="Enable daily Telegram digest")
