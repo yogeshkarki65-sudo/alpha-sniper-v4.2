@@ -945,7 +945,7 @@ async def main():
                                     logger.info(f"[EAGER] OPENED {sym} @ {entry_px:.8f} size=${size_usd:.2f} tp={tp:.8f} sl={sl_price:.8f}")
                                     eager_opened += 1
                         except Exception as e:
-                            logger.info(f"[EAGER] pipeline error: {e}")
+                            logger.error(f"[EAGER] pipeline error: {e}", exc_info=True)
 
                 if signals:
                     for sig in signals[:5]:  # Log first 5
