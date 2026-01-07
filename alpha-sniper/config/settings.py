@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     #   UNIVERSE_EXCLUDE_SYMBOL_PATTERNS="^USDC/USDT$,^PAXG/USDT$"
     UNIVERSE_EXCLUDE_BASES: Optional[str] = Field(default=None, description="Comma-separated base currencies to exclude")
     UNIVERSE_EXCLUDE_SYMBOL_PATTERNS: Optional[str] = Field(default=None, description="Comma-separated regex patterns to exclude symbols")
+    UNIVERSE_EXCLUDE_REGEX: Optional[str] = Field(
+        default=None,
+        description="Regex to exclude symbols from the universe (e.g., '(^[A-Z]+ON/USDT$|^EUR/USDT$|^XAUT/USDT$)')"
+    )
 
     # === DATABASE SETTINGS ===
     DB_PATH: str = Field(default="./data/alpha.db", description="SQLite database path")
@@ -61,6 +65,24 @@ class Settings(BaseSettings):
     MAX_PORTFOLIO_HEAT: float = Field(default=0.012, ge=0.001, le=0.1, description="Max portfolio heat")
     MAX_CONCURRENT_POSITIONS: int = Field(default=5, ge=1, le=20, description="Max concurrent positions")
     RISK_PER_TRADE: float = Field(default=0.0025, ge=0.0001, le=0.05, description="Risk per trade")
+
+    # === AUTO-BUMP TO EXCHANGE MINIMUMS ===
+    AUTO_BUMP_ENABLE: bool = Field(
+        default=True,
+        description="If True, bump order size to satisfy exchange minCost/minAmount automatically, with safety caps."
+    )
+    AUTO_BUMP_HEADROOM_PCT: float = Field(
+        default=0.02, ge=0.0, le=0.2,
+        description="Extra headroom above exchange minimums (e.g., 0.02 = +2%)."
+    )
+    AUTO_BUMP_MAX_MULT: float = Field(
+        default=2.5, ge=1.0, le=10.0,
+        description="Max multiple over risk-based size allowed for auto-bump."
+    )
+    AUTO_BUMP_MAX_ABS_USD: float = Field(
+        default=100.0, ge=1.0,
+        description="Absolute USD cap for auto-bump per order (safety ceiling)."
+    )
 
     # === LIVE TEST MODE ===
     LIVE_TEST_MODE: bool = Field(default=True, description="Enable live test mode with restricted trading")

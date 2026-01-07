@@ -56,6 +56,7 @@ class AsyncExchange:
         api_key: Optional[str] = None,
         secret: Optional[str] = None,
         testnet: bool = False,
+        settings: Optional[Any] = None,
         **opts: Any,
     ):
         """
@@ -66,9 +67,11 @@ class AsyncExchange:
             api_key: API key (optional for public endpoints)
             secret: API secret
             testnet: Use testnet/sandbox mode
+            settings: Optional settings object for auto-bump and other features
             **opts: Additional CCXT options
         """
         self.exchange_id = exchange_id
+        self.settings = settings
 
         try:
             exchange_class = getattr(ccxt, exchange_id)
@@ -274,6 +277,110 @@ class AsyncExchange:
         self._balance_cache = await self.fetch_balance()
         self._balance_cache_time = now
         return self._balance_cache
+
+    async def _get_free_usdt(self) -> float:
+        """
+        Get free USDT balance with caching.
+
+        Returns:
+            Free USDT balance
+        """
+        try:
+            bal = await self.fetch_balance_cached()
+            free = bal.get("free", {}) or bal.get("total", {})
+            return float(free.get("USDT", 0.0))
+        except Exception:
+            return 0.0
+
+    def _get_symbol_limits(self, symbol: str) -> tuple[float, float, Any, Any]:
+        """
+        Get exchange limits and precision for a symbol.
+
+        Args:
+            symbol: Trading pair
+
+        Returns:
+            (min_cost, min_amt, amt_prec, price_prec)
+        """
+        m = self.markets.get(symbol)
+        if not m:
+            # Try to load markets if not loaded
+            if not self._markets_loaded:
+                try:
+                    import asyncio
+                    loop = asyncio.get_event_loop()
+                    loop.run_until_complete(self.load_markets())
+                except Exception:
+                    pass
+            m = self.markets.get(symbol, {})
+
+        limits = m.get("limits", {}) or {}
+        prec = m.get("precision", {}) or {}
+        min_cost = (limits.get("cost") or {}).get("min") or 0.0
+        min_amt = (limits.get("amount") or {}).get("min") or 0.0
+        amt_prec = prec.get("amount")
+        price_prec = prec.get("price")
+        return float(min_cost), float(min_amt), amt_prec, price_prec
+
+    def _autobump_size_usd(
+        self,
+        symbol: str,
+        price: float,
+        requested_usd: float,
+        free_usdt: float,
+    ) -> tuple[float, str]:
+        """
+        Auto-bump order size to meet exchange minimums with safety caps.
+
+        Args:
+            symbol: Trading pair
+            price: Entry price
+            requested_usd: Risk-based order size in USD
+            free_usdt: Available USDT balance
+
+        Returns:
+            (final_usd, action_str) where action is one of:
+            - "disabled": Auto-bump is disabled
+            - "no_price": Price is zero or invalid
+            - "ok": Already meets minimums
+            - "no_balance": Insufficient balance
+            - "cap": Would exceed safety caps
+            - "bumped": Successfully bumped to meet minimums
+        """
+        # Check if auto-bump is enabled
+        if not self.settings or not getattr(self.settings, "AUTO_BUMP_ENABLE", True):
+            return requested_usd, "disabled"
+
+        price = float(price or 0.0)
+        if price <= 0:
+            return requested_usd, "no_price"
+
+        # Get exchange limits
+        min_cost, min_amt, _, _ = self._get_symbol_limits(symbol)
+        head = 1.0 + float(getattr(self.settings, "AUTO_BUMP_HEADROOM_PCT", 0.02))
+        need_usd = requested_usd
+
+        # Calculate required size based on minimums
+        if min_cost and min_cost > 0:
+            need_usd = max(need_usd, float(min_cost) * head)
+        if min_amt and min_amt > 0:
+            need_usd = max(need_usd, float(min_amt) * price * head)
+
+        # Apply safety caps
+        cap_by_mult = requested_usd * float(getattr(self.settings, "AUTO_BUMP_MAX_MULT", 2.5))
+        cap_by_abs = float(getattr(self.settings, "AUTO_BUMP_MAX_ABS_USD", 100.0))
+        cap_by_bal = max(0.0, float(free_usdt) * 0.98)
+
+        cap = min(cap_by_mult, cap_by_abs, cap_by_bal)
+
+        if need_usd <= requested_usd:
+            return requested_usd, "ok"  # Already meets minimums
+        if cap <= 0:
+            return requested_usd, "no_balance"
+        if need_usd > cap:
+            return requested_usd, "cap"  # Would exceed caps
+
+        return need_usd, "bumped"
 
     async def create_order(
         self,
@@ -599,6 +706,7 @@ class AsyncExchange:
         """
         Create an order with idempotency via clientOrderId.
 
+        Automatically bumps order size to meet exchange minimums (if enabled).
         If order creation fails, attempts to find the order by clientOrderId
         to prevent duplicate submissions.
 
@@ -619,6 +727,44 @@ class AsyncExchange:
         if client_oid:
             # Common key for idempotency; may fall back into info for some venues
             params.setdefault('clientOrderId', client_oid)
+
+        # Auto-bump logic (if enabled and we have price)
+        if price is not None and price > 0:
+            requested_usd = float(amount) * float(price)
+            free_usdt = await self._get_free_usdt()
+            final_usd, action = self._autobump_size_usd(symbol, price, requested_usd, free_usdt)
+
+            if action == "bumped":
+                # Recalculate amount with bumped size
+                amount = final_usd / float(price)
+                logger.info(
+                    f"[AUTO_BUMP] {symbol} size ${requested_usd:.2f} → ${final_usd:.2f} (reason={action})"
+                )
+            elif action in ("cap", "no_balance"):
+                logger.info(
+                    f"[AUTO_BUMP] {symbol} size ${requested_usd:.2f} not bumped (reason={action})"
+                )
+
+        # Apply precision rounding using ccxt helpers
+        try:
+            if price is not None:
+                price_str = self.client.price_to_precision(symbol, price)
+                price = float(price_str)
+            amount_str = self.client.amount_to_precision(symbol, amount)
+            amount = float(amount_str)
+
+            # Check if amount rounded to zero
+            if amount <= 0.0:
+                # Try to set to minimum amount if available
+                min_cost, min_amt, _, _ = self._get_symbol_limits(symbol)
+                if min_amt and min_amt > 0:
+                    amount_str = self.client.amount_to_precision(symbol, min_amt)
+                    amount = float(amount_str)
+                if amount <= 0.0:
+                    raise ValueError(f"Amount rounded to zero for {symbol} (precision issue)")
+        except Exception as e:
+            logger.error(f"[AUTO_BUMP] Precision error for {symbol}: {e}")
+            # Continue with original values
 
         try:
             if order_type == 'market':
@@ -761,6 +907,7 @@ def create_async_exchange(
     api_key: Optional[str] = None,
     secret: Optional[str] = None,
     testnet: bool = False,
+    settings: Optional[Any] = None,
     **opts: Any,
 ) -> AsyncExchange:
     """
@@ -771,6 +918,7 @@ def create_async_exchange(
         api_key: API key
         secret: API secret
         testnet: Use sandbox mode
+        settings: Optional settings object for auto-bump
         **opts: Additional CCXT options
 
     Returns:
@@ -781,5 +929,6 @@ def create_async_exchange(
         api_key=api_key,
         secret=secret,
         testnet=testnet,
+        settings=settings,
         **opts,
     )

@@ -14,6 +14,7 @@ Fully asynchronous trading bot with:
 import asyncio
 import signal
 import logging
+import re
 import sys
 import time
 import uuid
@@ -649,6 +650,7 @@ async def main():
             api_key=settings.API_KEY,
             secret=settings.API_SECRET,
             testnet=settings.TESTNET,
+            settings=settings,
         )
 
         # Load markets
@@ -769,6 +771,19 @@ async def main():
                     continue
 
                 logger.info(f"Universe: {len(symbols)} symbols")
+
+                # Apply universe exclude regex (if configured)
+                if settings.UNIVERSE_EXCLUDE_REGEX:
+                    try:
+                        _rx = re.compile(settings.UNIVERSE_EXCLUDE_REGEX)
+                        _before = len(symbols)
+                        symbols = [s for s in symbols if not _rx.search(s)]
+                        logger.info(
+                            f"Universe after exclude_regex: {len(symbols)} symbols "
+                            f"(removed {_before - len(symbols)} | pattern={settings.UNIVERSE_EXCLUDE_REGEX})"
+                        )
+                    except re.error as e:
+                        logger.warning(f"Bad UNIVERSE_EXCLUDE_REGEX: {settings.UNIVERSE_EXCLUDE_REGEX} ({e})")
 
                 # Step 2: Scan symbols (fetch OHLCV + compute indicators)
                 market_data = await scan_symbols(
