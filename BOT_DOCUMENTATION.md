@@ -671,7 +671,139 @@ sudo journalctl -u alpha-sniper-async.service -f | grep -E "EAGER|EAGER_SUMMARY"
 ```
 
 **Commits**:
-- `[current]`: Exchange validation hardening + universe filtering + EAGER cooldown + settings
+- `6b2bcf76`: Exchange validation hardening + universe filtering + EAGER cooldown + settings
+
+### Phase 5: Precision & Affordability Improvements (2026-01-07)
+
+**Problem**: After initial hardening, logs showing two new rejection patterns:
+1. **`rounded_to_zero`**: Custom floor-based rounding failing for expensive/whole-unit coins (XAUT, WIF, etc.)
+2. **`depth < floor`**: Conservative 8k depth threshold rejecting viable symbols (ENS $5k, ZORA $3.8k)
+
+**Root Causes**:
+1. **Custom rounding logic**: Manual `floor(x * 10^prec)` approach doesn't handle ccxt's complex precision rules
+2. **Expensive coin edge cases**: Symbols like XAUT ($2k/coin) with precision=0 (whole units only) → qty rounds to 0
+3. **No affordability pre-check**: Attempting validation on unaffordable markets before checking if we can even buy 1 unit
+4. **Generic depth threshold**: Main engine's MIN_DEPTH_USD_ABSOLUTE (8k) too strict for EAGER's aggressive entry style
+
+**Solutions Implemented**:
+
+#### 1. Replace Custom Rounding with ccxt Helpers (`exchange_async.py`)
+
+**Changes**:
+- Removed manual `_round_down()` function
+- Use ccxt's built-in `price_to_precision()` and `amount_to_precision()` methods
+- These handle exchange-specific rules correctly (step sizes, tick sizes, min amounts)
+- Calculate min_amt from precision if not in limits: `1.0` if `precision.amount=0`, else `10^-precision`
+- Replace `rounded_to_zero` with accurate `amount<min_amount` rejection
+- Include detailed rejection info: `{"qty": qty_raw, "min_amount": min_amt, "symbol": sym}`
+
+**Before** (problematic):
+```python
+def _round_down(x: float, prec: int) -> float:
+    step = 10 ** prec
+    return float(floor(x * step) / step)
+
+px = _round_down(px, price_prec)
+qty = _round_down(qty, amt_prec)
+
+if px <= 0 or qty <= 0:
+    return False, "rounded_to_zero", {"px": px, "qty": qty}
+```
+
+**After** (fixed):
+```python
+px_str = self.client.price_to_precision(symbol, px_raw)
+qty_str = self.client.amount_to_precision(symbol, qty_raw)
+px = float(px_str)
+qty = float(qty_str)
+
+if qty <= 0:
+    return False, "amount<min_amount", {
+        "qty": qty_raw,
+        "min_amount": float(min_amt),
+        "symbol": symbol
+    }
+```
+
+#### 2. Pre-Skip Unaffordable Markets (`app_async.py`)
+
+**Changes**:
+- Added affordability check **before** calling `validate_order()`
+- Calculate required notional for minimum viable position: `max(min_cost, need_qty × entry_px)`
+- For whole-unit coins (precision=0), need_qty = max(min_amt, 1.0)
+- Skip if `need_notional > free_usdt × 0.98`
+- Log specific reason: `"unaffordable (need≥$X, free=$Y)"`
+
+**Purpose**: Prevents attempting orders on XAUT/USDT ($2k minimum), expensive whole-unit coins
+
+**Example**:
+```
+[EAGER] XAUT/USDT skipped: unaffordable (need≥$2145.00, free=$172.53)
+```
+
+#### 3. EAGER-Specific Depth Threshold (`settings.py` + `app_async.py`)
+
+**Changes**:
+- Added `EAGER_MIN_DEPTH_USD: float = Field(default=5000.0, ...)` to settings
+- Updated depth check to use EAGER_MIN_DEPTH_USD instead of MIN_DEPTH_USD_ABSOLUTE
+- Allows EAGER to operate on thinner books (5k) while main engine stays strict (8k)
+
+**Rationale**:
+- EAGER uses limit IOC orders → less slippage risk than market orders
+- Tight stop loss (0.8%) → small risk even with some slippage
+- Conservative 8k threshold was rejecting good candidates (ENS, ZORA, etc.)
+
+#### 4. Enhanced Rejection Logging (`app_async.py`)
+
+**Changes**:
+- Updated rejection log to include full details dict: `f"[EAGER] {sym} rejected: {why} {det}"`
+- Mark cooldown and attempt even on rejection (prevents spam on failing symbols)
+
+**Before**: `[EAGER] CHZ/USDT rejected by validate_order: notional<min_cost`
+
+**After**: `[EAGER] CHZ/USDT rejected: notional<min_cost {'notional': 0.87, 'min_cost': 1.0, 'px': 0.0871, 'qty': 10.0, 'symbol': 'CHZ/USDT'}`
+
+**Expected Behavior After Fixes**:
+
+1. **No more `rounded_to_zero`**: Replaced with `amount<min_amount` showing actual values
+2. **Expensive coins pre-filtered**: XAUT, expensive whole-unit coins skipped before validation
+3. **More attempts possible**: Depth threshold lowered to $5k for EAGER
+4. **Clear rejection reasons**: Full details in logs for debugging
+
+**Monitoring Commands**:
+```bash
+# Watch for improved behavior
+sudo journalctl -u alpha-sniper-async.service -f | grep -E "EAGER|EAGER_SUMMARY"
+
+# Expected logs:
+# [EAGER] XAUT/USDT skipped: unaffordable (need≥$2145.00, free=$172.53)
+# [EAGER] WIF/USDT rejected: amount<min_amount {'qty': 0.023, 'min_amount': 1.0, 'symbol': 'WIF/USDT'}
+# [EAGER] CHZ/USDT rejected: notional<min_cost {'notional': 0.87, 'min_cost': 1.0, ...}
+# [EAGER_SUMMARY] candidates=4 attempted=1 opened=0 free_usdt=172.53
+
+# When conditions align with affordable symbol:
+# [EAGER] OPENED PEPE/USDT @ 0.00001234 size=$50.00 tp=0.00001252 sl=0.00001224
+```
+
+**Runtime Configuration** (after deployment):
+```bash
+cd /opt/alpha-sniper
+source venv/bin/activate
+
+# Lower depth threshold for EAGER (already default, but can adjust)
+python scripts/overrides_cli.py set --key EAGER_MIN_DEPTH_USD --value 5000
+
+# Confirm EAGER max per scan (should already be 1)
+python scripts/overrides_cli.py set --key EAGER_MAX_PER_SCAN --value 1
+
+# Optional: If still seeing many notional rejections, slightly increase position size
+# python scripts/overrides_cli.py set --key RISK_PER_TRADE --value 0.0025
+
+deactivate
+```
+
+**Commits**:
+- `[current]`: Precision helpers + affordability pre-check + EAGER depth threshold + enhanced logging
 
 ---
 

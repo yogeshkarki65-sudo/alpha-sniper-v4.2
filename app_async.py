@@ -929,11 +929,12 @@ async def main():
                                     if now - last_attempt < backoff_sec:
                                         continue
 
-                                    # Depth check
+                                    # Depth check (use EAGER-specific threshold)
                                     depth_usd = row.get("depth", 0.0)
-                                    min_depth = float(getattr(settings, "MIN_DEPTH_USD_ABSOLUTE", 5000.0))
-                                    if depth_usd > 0 and depth_usd < min_depth:
-                                        logger.info(f"[EAGER] {sym} skipped: depth ${depth_usd:.0f} < floor ${min_depth:.0f}")
+                                    depth_floor = float(getattr(settings, "EAGER_MIN_DEPTH_USD",
+                                                       getattr(settings, "MIN_DEPTH_USD_ABSOLUTE", 5000.0)))
+                                    if depth_usd > 0 and depth_usd < depth_floor:
+                                        logger.info(f"[EAGER] {sym} skipped: depth ${depth_usd:.0f} < floor ${depth_floor:.0f}")
                                         continue
 
                                     md = market_data.get(sym) or {}
@@ -957,11 +958,35 @@ async def main():
                                     if size_usd < min_viable:
                                         continue
 
+                                    # --- Affordability quick check: skip markets we can't size for ---
+                                    m_check = exchange.markets.get(sym) if hasattr(exchange, "markets") else None
+                                    if not m_check:
+                                        logger.info(f"[EAGER] {sym} skipped: no market meta")
+                                        continue
+
+                                    limits_check = m_check.get("limits") or {}
+                                    min_cost_check = limits_check.get("cost", {}).get("min", 1.0)
+                                    min_amt_check = limits_check.get("amount", {}).get("min", 0.0)
+
+                                    # Proposed qty at our planned size
+                                    qty_raw = size_usd / entry_px
+
+                                    # If whole-unit or min amount forces qty >= 1 (or min_amt), check affordability
+                                    prec_amt_check = m_check.get("precision", {}).get("amount", 0)
+                                    need_qty = max(float(min_amt_check or 0.0), 1.0) if int(prec_amt_check or 0) == 0 else float(min_amt_check or 0.0)
+                                    need_notional = max(float(min_cost_check or 0.0), need_qty * entry_px)
+
+                                    if need_notional > free_usdt * 0.98:
+                                        logger.info(f"[EAGER] {sym} skipped: unaffordable (need≥${need_notional:.2f}, free=${free_usdt:.2f})")
+                                        continue
+
                                     # Validate order and get rounded px/qty
                                     valid, why, det = await exchange.validate_order(sym, size_usd, entry_px)
                                     if not valid:
-                                        logger.info(f"[EAGER] {sym} rejected by validate_order: {why}")
-                                        continue
+                                        logger.info(f"[EAGER] {sym} rejected: {why} {det}")
+                                        EAGER_LAST_ATTEMPT[sym] = now
+                                        eager_attempted = 1
+                                        break  # Stop after attempt
 
                                     # Use validated px/qty from validate_order
                                     validated_px = det.get("px", entry_px)

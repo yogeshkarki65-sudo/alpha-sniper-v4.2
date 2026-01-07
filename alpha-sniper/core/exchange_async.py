@@ -471,41 +471,53 @@ class AsyncExchange:
             if re.match(pat, symbol):
                 return False, "unsupported_symbol_pattern", {"pattern": pat}
 
-        # --- Precision and rounding ---
-        price_prec = int(m.get("precision", {}).get("price", 8) or 8)
-        amt_prec = int(m.get("precision", {}).get("amount", 8) or 8)
+        # --- Get raw values and limits ---
+        px_raw = float(price)
+        qty_raw = float(size_usd) / max(px_raw, 1e-12)
+        notional_raw = px_raw * qty_raw
 
-        px = float(price)
-        qty = float(size_usd) / max(px, 1e-12)
+        limits = m.get("limits") or {}
+        min_cost = limits.get("cost", {}).get("min")
+        min_amt = limits.get("amount", {}).get("min")
 
-        # Round down to exchange precision (floor logic)
-        def _round_down(x: float, prec: int) -> float:
-            step = 10 ** prec
-            return float(floor(x * step) / step)
+        # Fallbacks for min_cost and min_amt
+        if min_cost is None:
+            min_cost = 1.0
+        if min_amt is None:
+            prec_amt = m.get("precision", {}).get("amount")
+            if isinstance(prec_amt, (int, float)):
+                # If precision=0 => step=1 (whole units); else use 10^-precision
+                min_amt = 1.0 if int(prec_amt or 0) == 0 else 10 ** (-int(prec_amt))
+            else:
+                min_amt = 0.0
 
-        px = _round_down(px, price_prec)
-        qty = _round_down(qty, amt_prec)
+        # --- Use ccxt's precision helpers ---
+        try:
+            px_str = self.client.price_to_precision(symbol, px_raw)
+            qty_str = self.client.amount_to_precision(symbol, qty_raw)
+            px = float(px_str)
+            qty = float(qty_str)
+        except Exception as e:
+            return False, "precision_error", {"err": str(e)}
 
-        if px <= 0 or qty <= 0:
-            return False, "rounded_to_zero", {"px": px, "qty": qty}
+        # --- Check for zero/underflow after precision ---
+        if qty <= 0:
+            return False, "amount<min_amount", {
+                "qty": qty_raw,
+                "min_amount": float(min_amt),
+                "symbol": symbol
+            }
 
         # --- Notional calculation in quote terms ---
         notional = px * qty
 
-        # Respect exchange min quote notional if present; else fallback to $1
-        limits = m.get("limits") or {}
-        min_cost = None
-        if limits.get("cost") and limits["cost"].get("min") is not None:
-            min_cost = float(limits["cost"]["min"])
-        else:
-            min_cost = 1.0
-
-        if notional < min_cost:
+        if notional < float(min_cost):
             return False, "notional<min_cost", {
                 "notional": notional,
-                "min_cost": min_cost,
+                "min_cost": float(min_cost),
                 "px": px,
-                "qty": qty
+                "qty": qty,
+                "symbol": symbol
             }
 
         # --- Balance check (quote currency) ---
@@ -526,7 +538,8 @@ class AsyncExchange:
             "px": px,
             "qty": qty,
             "notional": notional,
-            "min_cost": min_cost,
+            "min_cost": float(min_cost),
+            "min_amount": float(min_amt),
             "symbol": symbol
         }
 

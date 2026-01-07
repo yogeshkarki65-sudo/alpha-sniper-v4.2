@@ -160,6 +160,7 @@ class Settings(BaseSettings):
     EAGER_REQUIRE_ACCEL: bool = Field(default=False, description="Require acceleration for eager")
     EAGER_ONLY_LIVE_TEST: bool = Field(default=True, description="Safety: only with LIVE_TEST_MODE")
     EAGER_BACKOFF_SEC: int = Field(default=90, ge=30, le=300, description="Per-symbol cooldown between EAGER attempts (sec)")
+    EAGER_MIN_DEPTH_USD: float = Field(default=5000.0, ge=1000.0, le=50000.0, description="Minimum orderbook depth for EAGER (USD)")
 
     # -------- Near-miss depth snapshot (log only) --------
     SNAPSHOT_DEPTH_TOPK: int = Field(default=3, ge=0, le=10, description="Fetch orderbook for top-K near misses")
