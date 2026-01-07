@@ -14,6 +14,50 @@ from typing import List, Dict, Any, Optional
 logger = logging.getLogger(__name__)
 
 
+def _is_tradable_symbol(sym: str, markets: Dict[str, Any]) -> bool:
+    """
+    Check if symbol is tradable based on exchange market metadata.
+
+    Filters out:
+    - Non-existent markets
+    - Inactive or non-spot markets
+    - Stock tokens (e.g., NVDAON/USDT)
+    - Leveraged ETFs (3L, 3S, 5L, 5S)
+    - Directional tokens (UP, DOWN)
+
+    Args:
+        sym: Symbol to check
+        markets: Exchange markets dict
+
+    Returns:
+        True if symbol is tradable, False otherwise
+    """
+    m = markets.get(sym)
+    if not m:
+        return False
+
+    # Reject inactive or non-spot markets
+    if not m.get("active", True):
+        return False
+    if not m.get("spot", True):
+        return False
+    if m.get("type") not in (None, "spot"):
+        return False
+
+    # Regex guardrails for MEXC stock tokens, ETFs, and junk
+    bad_patterns = [
+        r".*ON/USDT$",        # tokenized stocks: NVDAON/USDT, etc.
+        r".*3L/USDT$", r".*3S/USDT$",
+        r".*5L/USDT$", r".*5S/USDT$",
+        r".*UP/USDT$", r".*DOWN/USDT$",
+    ]
+    for pat in bad_patterns:
+        if re.match(pat, sym):
+            return False
+
+    return True
+
+
 def _apply_exclusions(symbols: List[str], settings) -> List[str]:
     """
     Apply universe quality filters: exclude stable/pegged pairs and user-defined patterns.
@@ -98,12 +142,21 @@ async def select_top_liquid_symbols(
             logger.error("No tickers received from exchange")
             return []
 
+        # Get markets for tradability filtering
+        markets = exchange.markets or {}
+
         # Filter and collect candidates
         candidates = []
+        filtered_count = 0
 
         for symbol, ticker in tickers.items():
             # Filter by quote currency
             if not symbol.endswith(f"/{base_quote}"):
+                continue
+
+            # Filter non-tradable symbols (stock tokens, leveraged ETFs, inactive)
+            if not _is_tradable_symbol(symbol, markets):
+                filtered_count += 1
                 continue
 
             # Get 24h quote volume
@@ -124,6 +177,9 @@ async def select_top_liquid_symbols(
                 "quote_volume": quote_volume,
                 "last_price": last_price,
             })
+
+        if filtered_count > 0:
+            logger.info(f"Universe tradability filter: removed {filtered_count} non-tradable symbols")
 
         # Sort by quote volume descending
         candidates.sort(key=lambda x: x["quote_volume"], reverse=True)

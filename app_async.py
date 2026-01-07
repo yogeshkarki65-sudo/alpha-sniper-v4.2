@@ -47,6 +47,10 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+# --- EAGER cooldown tracking ---
+EAGER_LAST_ATTEMPT = {}  # sym -> timestamp
+EAGER_BACKOFF_SEC = 90   # Default, can be overridden by settings
+
 # Global stop event for graceful shutdown
 stop_event = asyncio.Event()
 
@@ -876,76 +880,137 @@ async def main():
 
                 # --- EAGER breakout entry path (optional, LIVE_TEST gated by default) ---
                 eager_opened = 0
+                eager_attempted = 0
+                eager_candidates = 0
                 eager_max_per_scan = int(getattr(settings, "EAGER_MAX_PER_SCAN", 1))
-                if getattr(settings, "EAGER_ENABLE", True) and (eager_opened < eager_max_per_scan):
+
+                # Get cooldown setting
+                global EAGER_BACKOFF_SEC
+                backoff_sec = float(getattr(settings, "EAGER_BACKOFF_SEC", EAGER_BACKOFF_SEC))
+
+                if getattr(settings, "EAGER_ENABLE", True):
                     if (not getattr(settings, "EAGER_ONLY_LIVE_TEST", True)) or bool(getattr(settings, "LIVE_TEST_MODE", True)):
                         try:
-                            for row in _rows:
-                                if eager_opened >= eager_max_per_scan:
-                                    break
-                                # Arm conditions: big vspike & not too negative over 5m; must not be a wick
-                                if row["vspike"] < float(settings.EAGER_VSPIKE_MIN):
-                                    continue
-                                if row["ret5m"] < float(settings.EAGER_MAX_NEG_RET5M):
-                                    continue
-                                if row["wick"]:
-                                    continue
-                                if getattr(settings, "EAGER_REQUIRE_ACCEL", False) and (not row["accel"]):
-                                    continue
-                                sym = row["symbol"]
-                                md = market_data.get(sym) or {}
-                                ohlcv = md.get("ohlcv") or []
-                                lookback_n = int(getattr(settings, "EAGER_LOOKBACK_HIGH_N", 5))
-                                if len(ohlcv) < max(6, lookback_n + 1):
-                                    continue
-                                highs = [float(x[2]) for x in ohlcv]
-                                lookback_high = max(highs[-(lookback_n+1):-1])
-                                trigger = lookback_high * (1.0 + float(settings.EAGER_EPS_PCT))
-                                last_close = float(ohlcv[-1][4])
-                                entry_px = max(trigger, last_close)
+                            # Check balance once before loop
+                            try:
+                                bal = await exchange.fetch_balance_cached()
+                                free_usdt = float(bal.get("free", {}).get("USDT", 0.0))
+                            except Exception as e:
+                                logger.warning(f"[EAGER] Failed to fetch balance: {e}")
+                                free_usdt = 0.0
 
-                                # position sizing with tight SL
-                                sl_price = entry_px * (1.0 - float(settings.EAGER_SL_PCT))
-                                size_usd = await risk.calculate_position_size_async(
-                                    {"symbol": sym, "side": "long", "engine": "pump"},
-                                    entry_px, sl_price
-                                )
-                                if size_usd < float(settings.MIN_VIABLE_TRADE_USD):
-                                    continue
-                                valid, why, det = await exchange.validate_order(sym, size_usd, entry_px)
-                                if not valid:
-                                    logger.info(f"[EAGER] {sym} rejected by validate_order: {why}")
-                                    continue
-                                qty = size_usd / entry_px
-                                # Sanitize symbol for client order ID (remove illegal chars)
-                                safe_sym = sym.replace("/", "").replace("-", "")
-                                client_oid = f"eager-{safe_sym}-{int(time.time()*1000)}"
-                                try:
-                                    order = await exchange.create_order_idempotent(
-                                        symbol=sym,
-                                        side="buy",
-                                        order_type="limit",
-                                        amount=qty,
-                                        price=entry_px,
-                                        params={"timeInForce": "IOC"},
-                                        client_oid=client_oid
+                            # Skip EAGER if balance too low
+                            min_viable = float(settings.MIN_VIABLE_TRADE_USD)
+                            if free_usdt < min_viable * 2:
+                                logger.info(f"[EAGER] skipped: free USDT too low ({free_usdt:.2f} < {min_viable*2:.2f})")
+                            else:
+                                now = time.time()
+
+                                for row in _rows:
+                                    # Stop after single attempt (success or failure)
+                                    if eager_attempted > 0:
+                                        break
+
+                                    # Arm conditions: big vspike & not too negative over 5m; must not be a wick
+                                    if row["vspike"] < float(settings.EAGER_VSPIKE_MIN):
+                                        continue
+                                    if row["ret5m"] < float(settings.EAGER_MAX_NEG_RET5M):
+                                        continue
+                                    if row["wick"]:
+                                        continue
+                                    if getattr(settings, "EAGER_REQUIRE_ACCEL", False) and (not row["accel"]):
+                                        continue
+
+                                    sym = row["symbol"]
+                                    eager_candidates += 1
+
+                                    # Cooldown check
+                                    last_attempt = EAGER_LAST_ATTEMPT.get(sym, 0)
+                                    if now - last_attempt < backoff_sec:
+                                        continue
+
+                                    # Depth check
+                                    depth_usd = row.get("depth", 0.0)
+                                    min_depth = float(getattr(settings, "MIN_DEPTH_USD_ABSOLUTE", 5000.0))
+                                    if depth_usd > 0 and depth_usd < min_depth:
+                                        logger.info(f"[EAGER] {sym} skipped: depth ${depth_usd:.0f} < floor ${min_depth:.0f}")
+                                        continue
+
+                                    md = market_data.get(sym) or {}
+                                    ohlcv = md.get("ohlcv") or []
+                                    lookback_n = int(getattr(settings, "EAGER_LOOKBACK_HIGH_N", 5))
+                                    if len(ohlcv) < max(6, lookback_n + 1):
+                                        continue
+
+                                    highs = [float(x[2]) for x in ohlcv]
+                                    lookback_high = max(highs[-(lookback_n+1):-1])
+                                    trigger = lookback_high * (1.0 + float(settings.EAGER_EPS_PCT))
+                                    last_close = float(ohlcv[-1][4])
+                                    entry_px = max(trigger, last_close)
+
+                                    # position sizing with tight SL
+                                    sl_price = entry_px * (1.0 - float(settings.EAGER_SL_PCT))
+                                    size_usd = await risk.calculate_position_size_async(
+                                        {"symbol": sym, "side": "long", "engine": "pump"},
+                                        entry_px, sl_price
                                     )
-                                except Exception as e:
-                                    logger.info(f"[EAGER] {sym} create_order failed: {e}")
-                                    continue
-                                if order and order.get("id"):
-                                    tp = entry_px * (1.0 + float(settings.EAGER_TP_PCT))
-                                    pos = {
-                                        "symbol": sym, "side": "long", "engine": "pump",
-                                        "entry_price": entry_px, "stop_loss": sl_price,
-                                        "tp_2r": tp, "tp_4r": tp,
-                                        "qty": qty, "size_usd": size_usd,
-                                        "timestamp_open": int(time.time()),
-                                        "max_hold_hours": max(0.25, float(getattr(settings, "HOLD_BRAIN_MAX_HOLD_HOURS", 8.0)))
-                                    }
-                                    await risk.add_position_async(pos)
-                                    logger.info(f"[EAGER] OPENED {sym} @ {entry_px:.8f} size=${size_usd:.2f} tp={tp:.8f} sl={sl_price:.8f}")
-                                    eager_opened += 1
+                                    if size_usd < min_viable:
+                                        continue
+
+                                    # Validate order and get rounded px/qty
+                                    valid, why, det = await exchange.validate_order(sym, size_usd, entry_px)
+                                    if not valid:
+                                        logger.info(f"[EAGER] {sym} rejected by validate_order: {why}")
+                                        continue
+
+                                    # Use validated px/qty from validate_order
+                                    validated_px = det.get("px", entry_px)
+                                    validated_qty = det.get("qty", size_usd / entry_px)
+
+                                    # Mark attempt (even if order fails, we tried)
+                                    eager_attempted = 1
+                                    EAGER_LAST_ATTEMPT[sym] = now
+
+                                    # Sanitize symbol for client order ID (remove illegal chars)
+                                    safe_sym = sym.replace("/", "").replace("-", "")
+                                    client_oid = f"eager-{safe_sym}-{int(now*1000)}"
+
+                                    try:
+                                        order = await exchange.create_order_idempotent(
+                                            symbol=sym,
+                                            side="buy",
+                                            order_type="limit",
+                                            amount=validated_qty,
+                                            price=validated_px,
+                                            params={"timeInForce": "IOC"},
+                                            client_oid=client_oid
+                                        )
+                                    except Exception as e:
+                                        logger.info(f"[EAGER] {sym} create_order failed: {e}")
+                                        break  # Stop after attempt
+
+                                    if order and order.get("id"):
+                                        tp = validated_px * (1.0 + float(settings.EAGER_TP_PCT))
+                                        pos = {
+                                            "symbol": sym, "side": "long", "engine": "pump",
+                                            "entry_price": validated_px, "stop_loss": sl_price,
+                                            "tp_2r": tp, "tp_4r": tp,
+                                            "qty": validated_qty, "size_usd": size_usd,
+                                            "timestamp_open": int(time.time()),
+                                            "max_hold_hours": max(0.25, float(getattr(settings, "HOLD_BRAIN_MAX_HOLD_HOURS", 8.0)))
+                                        }
+                                        await risk.add_position_async(pos)
+                                        logger.info(f"[EAGER] OPENED {sym} @ {validated_px:.8f} size=${size_usd:.2f} tp={tp:.8f} sl={sl_price:.8f}")
+                                        eager_opened += 1
+
+                                    # Break after first attempt regardless of outcome
+                                    break
+
+                            # Telemetry summary
+                            logger.info(
+                                f"[EAGER_SUMMARY] candidates={eager_candidates} attempted={eager_attempted} "
+                                f"opened={eager_opened} free_usdt={free_usdt:.2f}"
+                            )
                         except Exception as e:
                             logger.error(f"[EAGER] pipeline error: {e}", exc_info=True)
 

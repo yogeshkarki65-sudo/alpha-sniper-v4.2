@@ -11,6 +11,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+import time
+from math import floor
 from typing import Any, Dict, List, Optional
 
 from tenacity import (
@@ -86,11 +89,19 @@ class AsyncExchange:
         self.client: ccxt.Exchange = exchange_class(config)
         self._markets_loaded = False
         self._markets_cache: Dict[str, Any] = {}
+        self._balance_cache: Dict[str, Any] = {}
+        self._balance_cache_time: float = 0.0
+        self._balance_cache_ttl: float = 10.0  # 10 second cache
 
         logger.info(
             f"AsyncExchange initialized: {exchange_id} | "
             f"rateLimit={self.client.rateLimit}ms | testnet={testnet}"
         )
+
+    @property
+    def markets(self) -> Dict[str, Any]:
+        """Get cached markets dict."""
+        return self._markets_cache
 
     async def _retry(self, coro_factory, operation_name: str = "exchange_op"):
         """
@@ -246,6 +257,23 @@ class AsyncExchange:
             lambda: self.client.fetch_balance(),
             "fetch_balance",
         )
+
+    async def fetch_balance_cached(self) -> Dict[str, Any]:
+        """
+        Fetch balance with TTL cache to reduce API calls.
+
+        Returns cached balance if fresher than TTL, otherwise fetches new.
+
+        Returns:
+            Balance dict with 'free', 'used', 'total' per currency
+        """
+        now = time.time()
+        if now - self._balance_cache_time < self._balance_cache_ttl:
+            return self._balance_cache
+
+        self._balance_cache = await self.fetch_balance()
+        self._balance_cache_time = now
+        return self._balance_cache
 
     async def create_order(
         self,
@@ -403,6 +431,13 @@ class AsyncExchange:
         """
         Validate order against exchange limits before submission.
 
+        Hardened validation includes:
+        - Market type checks (active, spot-only)
+        - Symbol pattern filters (stock tokens, leveraged ETFs)
+        - Correct notional calculation in quote terms
+        - Balance checks against free quote currency
+        - Precision rounding with floor logic
+
         Args:
             symbol: Trading pair
             size_usd: Order size in USD
@@ -410,30 +445,90 @@ class AsyncExchange:
 
         Returns:
             (is_valid, reason, details_dict)
+            If valid, details contains validated 'px' and 'qty' to use in order
         """
-        m = self.market(symbol)
-        amount = size_usd / max(price, 1e-12)
-        amount, price = self.quantize_amount_price(symbol, amount, price)
+        # --- Market metadata validation ---
+        m = self.markets.get(symbol)
+        if not m:
+            return False, "no_market", {"symbol": symbol}
 
-        limits = m.get('limits', {})
-        min_notional = (limits.get('cost') or {}).get('min')
-        min_amount = (limits.get('amount') or {}).get('min')
+        # Reject anything not plain spot or inactive
+        if not m.get("active", True) or not m.get("spot", True) or m.get("type") not in (None, "spot"):
+            return False, "unsupported_market_type", {
+                "type": m.get("type"),
+                "spot": m.get("spot"),
+                "active": m.get("active")
+            }
 
-        if min_amount and amount < min_amount:
-            return (
-                False,
-                f"amount<{min_amount}",
-                {"amount": amount, "price": price, "symbol": symbol},
-            )
+        # Regex guardrails for MEXC stock tokens, ETFs, and junk
+        bad_patterns = [
+            r".*ON/USDT$",        # tokenized stocks: NVDAON/USDT, etc.
+            r".*3L/USDT$", r".*3S/USDT$",
+            r".*5L/USDT$", r".*5S/USDT$",
+            r".*UP/USDT$", r".*DOWN/USDT$",
+        ]
+        for pat in bad_patterns:
+            if re.match(pat, symbol):
+                return False, "unsupported_symbol_pattern", {"pattern": pat}
 
-        if min_notional and amount * price < min_notional:
-            return (
-                False,
-                f"notional<{min_notional}",
-                {"amount": amount, "price": price, "symbol": symbol, "notional": amount * price},
-            )
+        # --- Precision and rounding ---
+        price_prec = int(m.get("precision", {}).get("price", 8) or 8)
+        amt_prec = int(m.get("precision", {}).get("amount", 8) or 8)
 
-        return True, "OK", {"amount": amount, "price": price, "symbol": symbol}
+        px = float(price)
+        qty = float(size_usd) / max(px, 1e-12)
+
+        # Round down to exchange precision (floor logic)
+        def _round_down(x: float, prec: int) -> float:
+            step = 10 ** prec
+            return float(floor(x * step) / step)
+
+        px = _round_down(px, price_prec)
+        qty = _round_down(qty, amt_prec)
+
+        if px <= 0 or qty <= 0:
+            return False, "rounded_to_zero", {"px": px, "qty": qty}
+
+        # --- Notional calculation in quote terms ---
+        notional = px * qty
+
+        # Respect exchange min quote notional if present; else fallback to $1
+        limits = m.get("limits") or {}
+        min_cost = None
+        if limits.get("cost") and limits["cost"].get("min") is not None:
+            min_cost = float(limits["cost"]["min"])
+        else:
+            min_cost = 1.0
+
+        if notional < min_cost:
+            return False, "notional<min_cost", {
+                "notional": notional,
+                "min_cost": min_cost,
+                "px": px,
+                "qty": qty
+            }
+
+        # --- Balance check (quote currency) ---
+        try:
+            bal = await self.fetch_balance_cached()
+            free_quote = float(bal.get("free", {}).get("USDT", 0.0))
+            if notional > free_quote * 0.98:  # leave 2% headroom
+                return False, "insufficient_quote_balance", {
+                    "notional": notional,
+                    "free": free_quote
+                }
+        except Exception as e:
+            # Don't block order if balance fetch fails - log and continue
+            logger.warning(f"validate_order: balance check failed: {e}")
+
+        # Pass rounded values back via details so caller uses them
+        return True, "ok", {
+            "px": px,
+            "qty": qty,
+            "notional": notional,
+            "min_cost": min_cost,
+            "symbol": symbol
+        }
 
     async def get_liquidity_metrics(
         self, symbol: str, required_usd: float, max_levels: int = 20

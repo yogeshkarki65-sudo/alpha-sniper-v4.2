@@ -539,6 +539,139 @@ if avg_r <= -0.25:
 
 **Fix**:
 - `deb3d867`: Auto-sizing script to calculate optimal risk
+- `eeb2d7a2`: Increase TARGET_POSITION to $50 for safer margins
+
+### Phase 4: Comprehensive EAGER Hardening (2026-01-07)
+
+**Problem**: After 24+ hours of deployment, EAGER still generating 0 trades
+
+**Root Causes** (critical analysis):
+1. **Bad symbols in universe**: MEXC API rejecting stock tokens (NVDAON/USDT), leveraged ETFs (3L/3S, 5L/5S), causing {"code":10007,"msg":"symbol not support api"}
+2. **Order spam**: Loop attempted multiple orders per scan when first candidate failed (eager_opened only incremented on success), causing "Insufficient position" from cumulative notional
+3. **False notional rejections**: Min-notional validation used hardcoded $1.0 instead of exchange-specific `limits.cost.min`
+4. **No cooldown**: Same failing symbol retried every 60 seconds
+5. **No depth/balance guards**: Thin orderbooks and low balances not checked before order attempts
+
+**Solutions Implemented**:
+
+#### 1. Exchange Validation Hardening (`exchange_async.py`)
+
+**Changes**:
+- Added `markets` property to expose cached markets dict
+- Added `fetch_balance_cached()` with 10-second TTL to reduce API calls
+- Completely rewrote `validate_order()` with:
+  - Market type validation (reject inactive, non-spot, wrong type)
+  - Regex filters for bad symbols:
+    - `.*ON/USDT$` (stock tokens: NVDAON, QCOMON, AMDON, etc.)
+    - `.*3L/USDT$`, `.*3S/USDT$`, `.*5L/USDT$`, `.*5S/USDT$` (leveraged ETFs)
+    - `.*UP/USDT$`, `.*DOWN/USDT$` (directional tokens)
+  - Correct notional calculation: `px * qty` in quote terms
+  - Exchange-specific min cost from `limits.cost.min` (fallback $1.0)
+  - Floor-based precision rounding: `floor(x * 10^prec) / 10^prec`
+  - Balance check: notional ≤ 98% of free quote balance
+  - Returns validated `px` and `qty` in details dict for caller to use
+
+**Example rejection log**:
+```
+[EAGER] NVDAON/USDT rejected by validate_order: unsupported_symbol_pattern
+```
+
+#### 2. Universe Filtering (`universe/select.py`)
+
+**Changes**:
+- Added `_is_tradable_symbol()` function with same filters as validation
+- Applied filtering before ticker processing in `select_top_liquid_symbols()`
+- Logs count of filtered symbols: `"Universe tradability filter: removed N non-tradable symbols"`
+
+**Impact**: Stock tokens, leveraged ETFs never enter universe, eliminating 10007 errors at source
+
+#### 3. EAGER Loop Hardening (`app_async.py`)
+
+**Changes**:
+- Added module-level tracking:
+  ```python
+  EAGER_LAST_ATTEMPT = {}  # sym -> timestamp
+  EAGER_BACKOFF_SEC = 90   # Configurable via settings
+  ```
+- **Balance check once before loop**: Fetch cached balance, skip EAGER if `free_usdt < MIN_VIABLE_TRADE_USD * 2`
+- **Per-symbol cooldown**: Skip if `now - last_attempt < EAGER_BACKOFF_SEC` (default 90 sec)
+- **Depth guard**: Skip if `depth_usd < MIN_DEPTH_USD_ABSOLUTE` (default $5000)
+- **Single attempt per scan**: `eager_attempted` flag, break after first attempt (success OR failure)
+- **Use validated px/qty**: Take `det["px"]` and `det["qty"]` from `validate_order()` and pass to `create_order_idempotent()`
+- **Update cooldown after attempt**: `EAGER_LAST_ATTEMPT[sym] = now` even if order fails
+- **Telemetry summary**: Log `[EAGER_SUMMARY] candidates=X attempted=Y opened=Z free_usdt=W` after each scan
+
+**Before** (problematic):
+```python
+for row in _rows:
+    if eager_opened >= eager_max_per_scan:  # Only checks successes
+        break
+    # ... multiple attempts per scan possible
+    qty = size_usd / entry_px  # Unvalidated qty
+```
+
+**After** (fixed):
+```python
+for row in _rows:
+    if eager_attempted > 0:  # Stop after ANY attempt
+        break
+    # Cooldown check
+    if now - EAGER_LAST_ATTEMPT.get(sym, 0) < backoff_sec:
+        continue
+    # Depth check
+    if depth_usd < MIN_DEPTH_USD_ABSOLUTE:
+        continue
+    # ... validate and get rounded values
+    validated_px = det["px"]
+    validated_qty = det["qty"]
+    eager_attempted = 1
+    EAGER_LAST_ATTEMPT[sym] = now
+    # ... create order with validated values
+```
+
+#### 4. Settings Update (`settings.py`)
+
+**Changes**:
+- Added `EAGER_BACKOFF_SEC: int = Field(default=90, ge=30, le=300, description="Per-symbol cooldown between EAGER attempts (sec)")`
+
+**Purpose**: Prevents rapid-fire retries of failing symbols, reduces exchange rate limit pressure
+
+#### 5. Position Sizing Improvement (`fix_eager_autosize.sh`)
+
+**Changes**:
+- Increased `TARGET_POSITION` from $30 to $50
+- New calculation: `OPTIMAL_RISK = ($50 * 0.008) / $172 = 0.00232 (0.232%)`
+- Result: Position size = $50 (safely above all exchange minimums)
+
+**Why $50 vs $30**:
+- Many low-priced symbols (PEPE, LUNC, MOG) need larger qty to reach $1+ notional
+- $50 provides comfortable margin above exchange minimums
+- Still safely below account balance ($172)
+
+**Expected Behavior After Fixes**:
+
+1. **Universe selection**: No stock tokens, leveraged ETFs, or inactive markets
+2. **Validation**: All symbols pre-checked, correct notional calculation
+3. **Order attempts**: Maximum 1 per minute, cooldown prevents spam
+4. **Logs**: Clean rejections with specific reasons instead of exchange errors
+5. **Success rate**: Should see first EAGER fills within 2-3 hours of high-volume consolidations
+
+**Monitoring Commands**:
+```bash
+# Watch for clean behavior
+sudo journalctl -u alpha-sniper-async.service -f | grep -E "EAGER|EAGER_SUMMARY"
+
+# Should see:
+# [EAGER_SUMMARY] candidates=5 attempted=1 opened=0 free_usdt=172.53
+# [EAGER] PEPE/USDT rejected by validate_order: notional<min_cost
+# (At most ONE attempt per minute, no "symbol not support api" errors)
+
+# When conditions align:
+# [EAGER] OPENED CHZ/USDT @ 0.12345 size=$50.00 tp=0.12530 sl=0.12247
+```
+
+**Commits**:
+- `[current]`: Exchange validation hardening + universe filtering + EAGER cooldown + settings
 
 ---
 
