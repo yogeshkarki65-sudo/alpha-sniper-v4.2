@@ -35,12 +35,12 @@ fi
 print_info "Free USDT: \$$FREE_USDT"
 
 # Calculate optimal risk percentage
-# Formula: We want ~$30-50 position sizes (safe for $1 minimum, safe for balance)
+# Formula: We want ~$50 position sizes (safe for $1 minimum, safe for balance)
 # Position = (Balance * Risk) / SL%
-# $30 = ($FREE_USDT * Risk) / 0.008
-# Risk = ($30 * 0.008) / $FREE_USDT
+# $50 = ($FREE_USDT * Risk) / 0.008
+# Risk = ($50 * 0.008) / $FREE_USDT
 
-TARGET_POSITION=30
+TARGET_POSITION=50
 SL_PCT=0.008
 OPTIMAL_RISK=$(echo "scale=6; ($TARGET_POSITION * $SL_PCT) / $FREE_USDT" | bc)
 
