@@ -399,7 +399,7 @@ class AsyncRiskEngine:
         entry_price = position.get('entry_price', 0)
         size_usd = position.get('size_usd', 0)
         pnl_pct = (pnl_usd / size_usd * 100) if size_usd > 0 else 0
-        initial_risk = position.get('initial_risk_usd', 1)
+        initial_risk = position.get('initial_risk_usd') or 1  # Fallback to 1 if None or 0
         r_multiple = (pnl_usd / initial_risk) if initial_risk > 0 else 0
 
         timestamp_open = position.get('timestamp_open', time.time())
