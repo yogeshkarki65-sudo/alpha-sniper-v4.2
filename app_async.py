@@ -528,7 +528,11 @@ async def close_position_async(
                 filled_price = exit_price
 
         except Exception as e:
-            logger.error(f"Error closing position {symbol}: {e}", exc_info=True)
+            error_msg = str(e)
+            if "Oversold" in error_msg or "InsufficientFunds" in error_msg:
+                logger.warning(f"⚠️ Force-closing {symbol}: insufficient balance on exchange (position tracked but tokens missing)")
+            else:
+                logger.error(f"Error closing position {symbol}: {e}", exc_info=True)
             filled_price = exit_price
 
     # Calculate PnL
@@ -538,8 +542,9 @@ async def close_position_async(
     else:
         pnl_usd = (entry_price - filled_price) * qty
 
-    pnl_pct = (pnl_usd / position['size_usd'] * 100) if position['size_usd'] > 0 else 0
-    r_multiple = (pnl_usd / position['initial_risk_usd']) if position['initial_risk_usd'] > 0 else 0
+    pnl_pct = (pnl_usd / position['size_usd'] * 100) if position.get('size_usd', 0) > 0 else 0
+    initial_risk = position.get('initial_risk_usd') or 0
+    r_multiple = (pnl_usd / initial_risk) if initial_risk > 0 else 0
 
     # Save to trade history
     await risk.save_closed_trade_async(position, filled_price, pnl_usd, reason)
