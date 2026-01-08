@@ -279,7 +279,7 @@ async def manage_positions_loop(
     exchange: AsyncExchange,
     risk: AsyncRiskEngine,
     telegram: AsyncTelegram,
-    settings: Settings,
+    settings,
     autotune: 'AutoTunePro' = None,
 ):
     """
