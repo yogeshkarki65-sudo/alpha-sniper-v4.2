@@ -279,6 +279,7 @@ async def manage_positions_loop(
     exchange: AsyncExchange,
     risk: AsyncRiskEngine,
     telegram: AsyncTelegram,
+    settings: Settings,
     autotune: 'AutoTunePro' = None,
 ):
     """
@@ -740,7 +741,7 @@ async def main():
         logger.info("=" * 80)
 
         # Start background tasks
-        position_task = asyncio.create_task(manage_positions_loop(exchange, risk, telegram, autotune))
+        position_task = asyncio.create_task(manage_positions_loop(exchange, risk, telegram, settings, autotune))
         reconcile_task = asyncio.create_task(reconciliation_loop(exchange, risk, telegram))
         digest_task = asyncio.create_task(daily_digest_loop(risk, telegram, settings, autotune))
 
