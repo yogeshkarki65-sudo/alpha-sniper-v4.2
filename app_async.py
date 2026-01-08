@@ -973,6 +973,16 @@ async def main():
                                     if size_usd < min_viable:
                                         continue
 
+                                    # Apply auto-bump to meet exchange minimums (before validation)
+                                    if hasattr(exchange, '_autobump_size_usd'):
+                                        original_size = size_usd
+                                        size_usd, bump_action = exchange._autobump_size_usd(sym, entry_px, size_usd, free_usdt)
+                                        if bump_action in ("bumped", "capped"):
+                                            logger.info(f"[AUTO_BUMP] {sym} size ${original_size:.2f} → ${size_usd:.2f} (reason={bump_action})")
+                                        elif bump_action == "no_balance":
+                                            logger.info(f"[EAGER] {sym} skipped: insufficient balance for auto-bump")
+                                            continue
+
                                     # --- Affordability quick check: skip markets we can't size for ---
                                     m_check = exchange.markets.get(sym) if hasattr(exchange, "markets") else None
                                     if not m_check:

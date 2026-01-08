@@ -378,7 +378,8 @@ class AsyncExchange:
         if cap <= 0:
             return requested_usd, "no_balance"
         if need_usd > cap:
-            return requested_usd, "cap"  # Would exceed caps
+            # Would exceed caps - return the capped value instead of rejecting
+            return cap, "capped"  # Use max safe value
 
         return need_usd, "bumped"
 
@@ -734,13 +735,13 @@ class AsyncExchange:
             free_usdt = await self._get_free_usdt()
             final_usd, action = self._autobump_size_usd(symbol, price, requested_usd, free_usdt)
 
-            if action == "bumped":
-                # Recalculate amount with bumped size
+            if action in ("bumped", "capped"):
+                # Recalculate amount with bumped/capped size
                 amount = final_usd / float(price)
                 logger.info(
                     f"[AUTO_BUMP] {symbol} size ${requested_usd:.2f} → ${final_usd:.2f} (reason={action})"
                 )
-            elif action in ("cap", "no_balance"):
+            elif action == "no_balance":
                 logger.info(
                     f"[AUTO_BUMP] {symbol} size ${requested_usd:.2f} not bumped (reason={action})"
                 )
