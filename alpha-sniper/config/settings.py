@@ -233,7 +233,7 @@ class Settings(BaseSettings):
 
     # Pydantic settings configuration
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=".env.async",
         env_prefix="ALPHA_",
         env_file_encoding="utf-8",
         case_sensitive=True,
