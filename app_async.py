@@ -989,6 +989,12 @@ async def main():
                                             logger.info(f"[EAGER] {sym} skipped: insufficient balance for auto-bump")
                                             continue
 
+                                    # Apply LIVE_TEST_MODE cap if enabled
+                                    if settings.LIVE_TEST_MODE and settings.LIVE_TEST_MAX_USD_PER_ORDER:
+                                        if size_usd > settings.LIVE_TEST_MAX_USD_PER_ORDER:
+                                            logger.info(f"[LIVE_TEST] {sym} size capped ${size_usd:.2f} → ${settings.LIVE_TEST_MAX_USD_PER_ORDER:.2f}")
+                                            size_usd = settings.LIVE_TEST_MAX_USD_PER_ORDER
+
                                     # --- Affordability quick check: skip markets we can't size for ---
                                     m_check = exchange.markets.get(sym) if hasattr(exchange, "markets") else None
                                     if not m_check:
