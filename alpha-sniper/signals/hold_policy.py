@@ -169,8 +169,11 @@ def should_demote(
     """
     Check if position should be demoted (expired early).
 
-    Criteria:
-    - Position flat or negative for HOLD_BRAIN_DEMOTE_FLAT_MIN minutes
+    Criteria with profit-based grace periods:
+    - Losing/flat positions (R < 0.5): Base minimum hold time
+    - Small winners (0.5 <= R < 1.5): Base + 10 min grace
+    - Good winners (R >= 1.5): Base + 30 min grace (configurable via HOLD_BRAIN_WINNER_GRACE_MIN)
+    - Peak tracking: If position reaches profit threshold then falls back, grace period applies
 
     Args:
         position: Position dict
@@ -186,18 +189,39 @@ def should_demote(
     # Calculate R-multiple
     r_mult = calculate_r_multiple(position, current_price)
 
-    # If position is winning, don't demote
-    if r_mult >= 0.5:  # Small buffer
-        return False
-
     # Check how long position has been flat/negative
     timestamp_open = position.get('timestamp_open', time.time())
     age_minutes = (time.time() - timestamp_open) / 60.0
 
+    # Base minimum hold time
     flat_min = getattr(settings, 'HOLD_BRAIN_DEMOTE_FLAT_MIN', 2)
 
-    # Demote if been flat/negative for enough time
-    if age_minutes >= flat_min and r_mult < 0.5:
+    # Track peak R-multiple to determine grace period eligibility
+    peak_r = position.get('peak_r_multiple', r_mult)
+    if r_mult > peak_r:
+        peak_r = r_mult
+        position['peak_r_multiple'] = peak_r
+
+    # Profit-based grace periods
+    # If position ever reached higher profits, it gets grace time
+    grace_minutes = 0
+
+    if peak_r >= 1.5:
+        # Good winner - gets 30 min grace period
+        grace_minutes = getattr(settings, 'HOLD_BRAIN_WINNER_GRACE_MIN', 30)
+    elif peak_r >= 0.5:
+        # Small winner - gets 10 min grace period
+        grace_minutes = 10
+
+    # Total minimum hold = base + grace
+    total_min_hold = flat_min + grace_minutes
+
+    # If position is currently winning decently, don't demote yet
+    if r_mult >= 0.5:
+        return False
+
+    # Demote if been flat/negative long enough (considering grace period)
+    if age_minutes >= total_min_hold:
         return True
 
     return False
