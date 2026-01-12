@@ -27,7 +27,7 @@ class AutoTunePro:
     within safe bounds. Can flip LIVE_TEST_MODE off under guardrails.
     """
 
-    def __init__(self, settings, overlay, log: Optional[logging.Logger] = None):
+    def __init__(self, settings, overlay, log: Optional[logging.Logger] = None, db_conn=None):
         """
         Initialize AutoTune Pro.
 
@@ -35,10 +35,12 @@ class AutoTunePro:
             settings: Settings object
             overlay: RuntimeSettings overlay for making adjustments
             log: Optional logger instance
+            db_conn: Optional database connection for historical analysis
         """
         self.s = settings
         self.ovr = overlay
         self.log = log or logger
+        self.db = db_conn
 
         # Signal flow tracking
         self.scan_window = deque(maxlen=self.s.AUTOTUNE_WINDOW_SCANS)
@@ -64,6 +66,14 @@ class AutoTunePro:
         self._restore_scans = 0
         self._quiet_scans_2 = 0
         self._accel_forced_off = False
+
+        # Win rate tracking
+        self._last_winrate_check_scan = -10**9
+        self._last_winrate_adjustment = 0  # timestamp
+
+        # Trade frequency tracking
+        self._last_trade_timestamp = 0
+        self._last_quiet_adjustment = 0  # timestamp
 
         # Check if we're already at max loosening + floor on startup → trigger second notch immediately
         self._check_startup_second_notch()
@@ -136,6 +146,13 @@ class AutoTunePro:
             self.r_last_trades.append(float(r_multiple))
         except (ValueError, TypeError):
             pass
+
+    def on_trade_opened(self):
+        """
+        Record that a new trade was opened (for quiet market detection).
+        """
+        import time
+        self._last_trade_timestamp = int(time.time())
 
     # === METRICS ===
 
@@ -479,6 +496,132 @@ class AutoTunePro:
             f"slip_p95={self._p95_slip_bps():.0f}bps "
             f"ioc_rej={self._ioc_reject_rate():.0%}"
         )
+
+    def maybe_adjust_for_low_winrate(self):
+        """
+        Check historical win rate from database. If < 40% after 100+ trades,
+        auto-tighten signal requirements to be more selective.
+
+        This helps filter out poor quality signals when strategy is underperforming.
+        """
+        if not self.db:
+            return
+
+        # Check cooldown (only check every 50 scans to avoid constant DB queries)
+        if self._scan_count - self._last_winrate_check_scan < 50:
+            return
+
+        self._last_winrate_check_scan = self._scan_count
+
+        # Also enforce minimum time between adjustments (1 hour)
+        import time
+        now = int(time.time())
+        if now - self._last_winrate_adjustment < 3600:
+            return
+
+        try:
+            # Query database for total trades and win rate
+            cursor = self.db.execute("""
+                SELECT
+                    COUNT(*) as total,
+                    SUM(CASE WHEN pnl_usd > 0 THEN 1 ELSE 0 END) as wins
+                FROM trades
+            """)
+            row = cursor.fetchone()
+
+            if not row or not row[0]:
+                return
+
+            total_trades = row[0]
+            wins = row[1] or 0
+
+            # Need at least 100 trades for reliable statistics
+            if total_trades < 100:
+                return
+
+            winrate = wins / total_trades if total_trades > 0 else 0
+
+            # If win rate is dangerously low, tighten requirements
+            if winrate < 0.40:
+                ret5m = float(self.s.EARLY_RET_5M_MIN)
+                vsp = float(self.s.EARLY_VOL_SPIKE_MIN)
+
+                # Tighten thresholds (increase values for more selectivity)
+                new_ret = self._clamp(
+                    ret5m + 0.002,  # Increase by 0.2%
+                    *self.s.AUTOTUNE_RET5M_BOUNDS
+                )
+                new_vsp = self._clamp(
+                    vsp + 0.2,  # Increase by 0.2x
+                    *self.s.AUTOTUNE_VSPIKE_BOUNDS
+                )
+
+                if (new_ret, new_vsp) != (ret5m, vsp):
+                    self.ovr.set("EARLY_RET_5M_MIN", new_ret)
+                    self.ovr.set("EARLY_VOL_SPIKE_MIN", new_vsp)
+                    self._last_winrate_adjustment = now
+
+                    self.log.warning(
+                        f"[WINRATE_ADJUST] Low winrate={winrate:.1%} ({wins}/{total_trades}) -> "
+                        f"Tightening: RET5M={new_ret:.4f}, VSP={new_vsp:.2f}"
+                    )
+
+        except Exception as e:
+            self.log.error(f"Error checking win rate: {e}")
+
+    def maybe_adjust_for_quiet_trades(self):
+        """
+        Detect if no actual trades have been opened for several hours.
+        If market is too quiet (signals generated but no fills), auto-loosen
+        requirements to increase trade opportunities.
+
+        This is different from signal-based loosening - it's based on actual
+        execution, not just signal generation.
+        """
+        import time
+        now = int(time.time())
+
+        # If we've never opened a trade, don't loosen yet
+        if self._last_trade_timestamp == 0:
+            return
+
+        # Check if no trades for 6 hours
+        hours_since_last_trade = (now - self._last_trade_timestamp) / 3600
+
+        # Minimum 6 hours quiet, and at least 2 hours since last adjustment
+        if hours_since_last_trade < 6.0:
+            return
+
+        if now - self._last_quiet_adjustment < 7200:  # 2 hour cooldown
+            return
+
+        # Loosen requirements
+        ret5m = float(self.s.EARLY_RET_5M_MIN)
+        depth = float(getattr(self.s, "EAGER_MIN_DEPTH_USD", 5000))
+
+        new_ret = self._clamp(
+            ret5m - 0.001,  # Lower by 0.1%
+            *self.s.AUTOTUNE_RET5M_BOUNDS
+        )
+
+        # Lower depth requirement if above 3000
+        new_depth = max(3000.0, depth - 1000.0)
+
+        changed = False
+        if new_ret != ret5m:
+            self.ovr.set("EARLY_RET_5M_MIN", new_ret)
+            changed = True
+
+        if new_depth != depth and hasattr(self.s, "EAGER_MIN_DEPTH_USD"):
+            self.ovr.set("EAGER_MIN_DEPTH_USD", new_depth)
+            changed = True
+
+        if changed:
+            self._last_quiet_adjustment = now
+            self.log.info(
+                f"[QUIET_MARKET] No trades for {hours_since_last_trade:.1f}h -> "
+                f"Loosening: RET5M={new_ret:.4f}, MIN_DEPTH=${new_depth:.0f}"
+            )
 
     # === SNAPSHOT (for digest) ===
 

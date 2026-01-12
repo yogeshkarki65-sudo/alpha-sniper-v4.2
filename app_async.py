@@ -731,9 +731,11 @@ async def main():
         pump_engine = PumpEngine(pump_config, logger)
         logger.info("Pump engine initialized")
 
-        # Initialize AutoTune Pro
+        # Initialize AutoTune Pro with database connection
         logger.info("Initializing AutoTune Pro...")
-        autotune = AutoTunePro(settings, overlay, logger)
+        import sqlite3
+        db_conn = sqlite3.connect(risk.db_path, check_same_thread=False)
+        autotune = AutoTunePro(settings, overlay, logger, db_conn)
         logger.info(f"AutoTune Pro initialized (enabled: {settings.AUTOTUNE_ENABLE})")
 
         # Initialize caches
@@ -1063,6 +1065,7 @@ async def main():
                                             "max_hold_hours": max(0.25, float(getattr(settings, "HOLD_BRAIN_MAX_HOLD_HOURS", 8.0)))
                                         }
                                         await risk.add_position_async(pos)
+                                        autotune.on_trade_opened()  # Track trade timing for quiet market detection
                                         logger.info(f"[EAGER] OPENED {sym} @ {validated_px:.8f} size=${size_usd:.2f} tp={tp:.8f} sl={sl_price:.8f}")
                                         eager_opened += 1
 
@@ -1098,6 +1101,8 @@ async def main():
                 autotune.maybe_tune()
                 autotune.maybe_sizing_autopilot()
                 autotune.maybe_flip_live_test_off()
+                autotune.maybe_adjust_for_low_winrate()  # Tighten if winrate < 40% after 100+ trades
+                autotune.maybe_adjust_for_quiet_trades()  # Loosen if no trades for hours
 
             except asyncio.CancelledError:
                 logger.info("Trading loop cancelled")
