@@ -1058,6 +1058,7 @@ async def main():
                                             "entry_price": validated_px, "stop_loss": sl_price,
                                             "tp_2r": tp, "tp_4r": tp,
                                             "qty": validated_qty, "size_usd": size_usd,
+                                            "initial_risk_usd": size_usd * float(settings.EAGER_SL_PCT),
                                             "timestamp_open": int(time.time()),
                                             "max_hold_hours": max(0.25, float(getattr(settings, "HOLD_BRAIN_MAX_HOLD_HOURS", 8.0)))
                                         }
