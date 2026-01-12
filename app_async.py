@@ -32,7 +32,7 @@ from notify.telegram_async import AsyncTelegram
 from scanner.runner import scan_symbols, MarketDataCache
 from universe.select import select_top_liquid_symbols_with_cache
 from signals.pump_engine import PumpEngine
-from signals.hold_policy import update_position_with_hold_brain
+from signals.hold_policy import update_position_with_hold_brain, calculate_r_multiple
 from risk.async_risk_engine import AsyncRiskEngine
 from utils.locks import symbol_lock
 from utils.timebar import sleep_until_next_minute
@@ -322,13 +322,14 @@ async def manage_positions_loop(
 
                     unrealized_r = unrealized_pnl / risk_per_unit
 
-                    # Dynamic Hold Brain: Promote/Demote/Trailing Stop
+                    # Dynamic Hold Brain: Promote/Demote/Trailing Stop/Progressive Locks
                     # Fetch market data for hold brain analysis (if available)
                     market_data_for_brain = None
-                    # We'll pass None for now - could fetch OHLCV here if needed for EMA/RVOL checks
+                    atr = None  # TODO: Fetch ATR for dynamic trailing (optional enhancement)
+                    # We'll pass None for now - could fetch OHLCV/ATR here if needed for EMA/RVOL/ATR checks
 
                     updated_pos, brain_action = update_position_with_hold_brain(
-                        pos, current_price, market_data_for_brain, settings
+                        pos, current_price, market_data_for_brain, settings, atr
                     )
 
                     # Handle brain actions
@@ -344,18 +345,27 @@ async def manage_positions_loop(
                         await risk.update_position_async(updated_pos)
                         logger.info(f"🧠 Hold brain: PROMOTE {symbol} (deadline extended, count={updated_pos.get('promoted_count', 0)})")
                         pos = updated_pos
+                    elif brain_action == "PROFIT_LOCK":
+                        await risk.update_position_async(updated_pos)
+                        r_now = calculate_r_multiple(updated_pos, current_price)
+                        if updated_pos.get('be_locked') and updated_pos.get('profit_locked'):
+                            logger.info(f"🔒 Hold brain: PROFIT LOCK {symbol} @ +{r_now:.2f}R (stop=${updated_pos['stop_loss']:.6f}, locked +0.3R)")
+                        else:
+                            logger.info(f"🔒 Hold brain: BE LOCK {symbol} @ +{r_now:.2f}R (stop=BE ${updated_pos['stop_loss']:.6f})")
+                        pos = updated_pos
+                        stop_loss = pos['stop_loss']  # Update for subsequent checks
                     elif brain_action == "TRAILING_STOP":
                         await risk.update_position_async(updated_pos)
                         logger.info(f"🧠 Hold brain: TRAILING_STOP {symbol} (new stop=${updated_pos['stop_loss']:.6f})")
                         pos = updated_pos
                         stop_loss = pos['stop_loss']  # Update for subsequent checks
 
-                    # Breakeven at +0.7R
-                    if unrealized_r >= 0.7 and not pos.get('breakeven_moved'):
+                    # Legacy breakeven at +0.7R (backup if Hold Brain locks didn't trigger)
+                    if unrealized_r >= 0.7 and not pos.get('breakeven_moved') and not pos.get('be_locked'):
                         pos['stop_loss'] = entry_price
                         pos['breakeven_moved'] = 1
                         await risk.update_position_async(pos)
-                        logger.info(f"🔒 Breakeven activated for {symbol} at +{unrealized_r:.2f}R")
+                        logger.info(f"🔒 Breakeven activated for {symbol} at +{unrealized_r:.2f}R (legacy)")
 
                     # Partial TP at +2R
                     if unrealized_r >= 2.0 and not pos.get('partial_tp_taken'):

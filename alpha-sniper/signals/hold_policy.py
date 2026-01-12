@@ -4,7 +4,9 @@ Dynamic Hold Policy (Hold Brain)
 Implements intelligent position management with:
 - Promote winners (extend deadline)
 - Demote losers (expire early)
-- Trailing stops based on R-multiple
+- Trailing stops (ATR-based or percentage)
+- Progressive profit locking (BE at 0.5R, lock 0.3R at 1.0R)
+- Giveback/decay exits (close if gives back >50% of peak)
 - EMA slope analysis
 """
 
@@ -202,7 +204,24 @@ def should_demote(
         peak_r = r_mult
         position['peak_r_multiple'] = peak_r
 
-    # Profit-based grace periods
+    # === GIVEBACK/DECAY EXIT ===
+    # If position was profitable but gave back >50% of peak gains, exit
+    giveback_threshold = getattr(settings, 'HOLD_BRAIN_DECAY_GIVEBACK_PCT', 0.5)
+    if peak_r > 0.5 and r_mult < peak_r:
+        giveback = peak_r - r_mult
+        if giveback >= (peak_r * giveback_threshold):
+            # Gave back >50% of peak profit - exit immediately
+            return True
+
+    # === EXPLICIT LOSER WINDOW (5-15min) ===
+    # Between 5-15 minutes, aggressively close losers
+    loser_eval_window_min = getattr(settings, 'HOLD_BRAIN_LOSER_EVAL_MIN', 15)
+    if flat_min <= age_minutes < loser_eval_window_min:
+        if r_mult <= 0.0:
+            # Losing position in early window - exit
+            return True
+
+    # Profit-based grace periods (for winners that fall back)
     # If position ever reached higher profits, it gets grace time
     grace_minutes = 0
 
@@ -231,19 +250,23 @@ def calculate_trailing_stop(
     position: Dict[str, Any],
     current_price: float,
     peak_price: Optional[float],
-    settings
+    settings,
+    atr: Optional[float] = None
 ) -> Optional[float]:
     """
     Calculate trailing stop price if applicable.
 
     Activates after HOLD_BRAIN_TRAILING_STOP_R_TRIGGER (default 1.5R)
-    Trails by HOLD_BRAIN_TRAILING_STOP_PCT (default 2%)
+    Supports two modes:
+    - ATR-based: Uses ATR * multiplier for dynamic trailing (preferred)
+    - Percentage-based: Uses fixed percentage (fallback)
 
     Args:
         position: Position dict
         current_price: Current market price
         peak_price: Peak price since entry (None if not tracking)
         settings: Settings object
+        atr: Average True Range value (optional, enables ATR-based trailing)
 
     Returns:
         New stop-loss price, or None if trailing not active
@@ -266,13 +289,25 @@ def calculate_trailing_stop(
         peak_price = max(peak_price, current_price)
 
     # Calculate trailing stop
-    trail_pct = getattr(settings, 'HOLD_BRAIN_TRAILING_STOP_PCT', 0.02)
     side = position.get('side', 'long')
 
-    if side == 'long':
-        new_stop = peak_price * (1.0 - trail_pct)
+    # Prefer ATR-based trailing if available
+    if atr and atr > 0:
+        atr_mult = getattr(settings, 'HOLD_BRAIN_TRAIL_ATR_MULT', 1.2)
+        trail_distance = atr * atr_mult
+
+        if side == 'long':
+            new_stop = peak_price - trail_distance
+        else:
+            new_stop = peak_price + trail_distance
     else:
-        new_stop = peak_price * (1.0 + trail_pct)
+        # Fallback to percentage-based
+        trail_pct = getattr(settings, 'HOLD_BRAIN_TRAILING_STOP_PCT', 0.02)
+
+        if side == 'long':
+            new_stop = peak_price * (1.0 - trail_pct)
+        else:
+            new_stop = peak_price * (1.0 + trail_pct)
 
     # Only move stop in favorable direction
     current_stop = position.get('stop_loss', 0)
@@ -280,6 +315,60 @@ def calculate_trailing_stop(
         return max(new_stop, current_stop)
     else:
         return min(new_stop, current_stop)
+
+
+def check_progressive_profit_lock(
+    position: Dict[str, Any],
+    current_price: float,
+    settings
+) -> Optional[float]:
+    """
+    Check if position should have profit locked via stop-loss adjustment.
+
+    Progressive locking strategy:
+    - At +0.5R: Move stop to breakeven (protect capital)
+    - At +1.0R: Lock in +0.3R profit (secure gains)
+    - At +1.5R+: Let trailing stop handle it
+
+    Args:
+        position: Position dict
+        current_price: Current market price
+        settings: Settings object
+
+    Returns:
+        New stop-loss price if lock should apply, None otherwise
+    """
+    if not getattr(settings, 'HOLD_BRAIN_ENABLE', True):
+        return None
+
+    # Calculate R-multiple
+    r_mult = calculate_r_multiple(position, current_price)
+
+    entry = position.get('entry_price', 0)
+    stop = position.get('stop_loss', 0)
+    side = position.get('side', 'long')
+    risk_per_unit = abs(entry - stop)
+
+    # Check if already locked at this level
+    be_locked = position.get('be_locked', False)
+    profit_locked = position.get('profit_locked', False)
+
+    # Lock 1: Breakeven at +0.5R
+    if not be_locked and r_mult >= 0.5:
+        position['be_locked'] = True
+        return entry  # Move stop to breakeven
+
+    # Lock 2: Secure profit at +1.0R (+0.3R)
+    if be_locked and not profit_locked and r_mult >= 1.0:
+        lock_r = getattr(settings, 'HOLD_BRAIN_LOCK_PROFIT_R', 0.3)
+        position['profit_locked'] = True
+
+        if side == 'long':
+            return entry + (lock_r * risk_per_unit)
+        else:
+            return entry - (lock_r * risk_per_unit)
+
+    return None
 
 
 def check_hard_cap_exceeded(
@@ -311,7 +400,8 @@ def update_position_with_hold_brain(
     position: Dict[str, Any],
     current_price: float,
     market_data: Optional[Dict[str, Any]],
-    settings
+    settings,
+    atr: Optional[float] = None
 ) -> Tuple[Dict[str, Any], str]:
     """
     Update position based on hold brain logic.
@@ -323,12 +413,14 @@ def update_position_with_hold_brain(
         current_price: Current market price
         market_data: Market data dict (optional)
         settings: Settings object
+        atr: Average True Range (optional, for ATR-based trailing)
 
     Returns:
         (updated_position, action) where action is one of:
         - "PROMOTED" - deadline extended
         - "DEMOTED" - should close early
         - "TRAILING_STOP" - trailing stop updated
+        - "PROFIT_LOCK" - progressive profit lock applied
         - "HARD_CAP" - hard cap exceeded
         - "NONE" - no action
     """
@@ -342,6 +434,12 @@ def update_position_with_hold_brain(
     # Check for demotion
     if should_demote(position, current_price, settings):
         return position, "DEMOTED"
+
+    # Check progressive profit locking (BE at 0.5R, profit at 1.0R)
+    lock_stop = check_progressive_profit_lock(position, current_price, settings)
+    if lock_stop is not None:
+        position['stop_loss'] = lock_stop
+        return position, "PROFIT_LOCK"
 
     # Check for promotion
     if should_promote(position, current_price, market_data, settings):
@@ -357,9 +455,9 @@ def update_position_with_hold_brain(
             position['promoted_count'] = promoted_count + 1
             return position, "PROMOTED"
 
-    # Check trailing stop
+    # Check trailing stop (ATR-based if available)
     peak_price = position.get('peak_price')
-    new_stop = calculate_trailing_stop(position, current_price, peak_price, settings)
+    new_stop = calculate_trailing_stop(position, current_price, peak_price, settings, atr)
 
     if new_stop is not None:
         # Update peak price
