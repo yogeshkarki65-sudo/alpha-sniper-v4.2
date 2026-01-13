@@ -235,8 +235,9 @@ def should_demote(
     # Total minimum hold = base + grace
     total_min_hold = flat_min + grace_minutes
 
-    # If position is currently winning decently, don't demote yet
-    if r_mult >= 0.5:
+    # If position is currently profitable (any profit), don't demote yet
+    # Changed from 0.5R to 0.0R to keep all profitable positions
+    if r_mult > 0.0:
         return False
 
     # Demote if been flat/negative long enough (considering grace period)
