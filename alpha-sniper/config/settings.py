@@ -215,6 +215,13 @@ class Settings(BaseSettings):
     HOLD_BRAIN_TRAILING_STOP_PCT: float = Field(default=0.02, ge=0.005, description="Trailing stop % from peak")
     HOLD_BRAIN_MAX_HOLD_HOURS: float = Field(default=8.0, ge=0.5, description="Hard cap max hold time (hours)")
 
+    # Hold Brain - Advanced Features (Progressive Locking, Giveback, ATR)
+    HOLD_BRAIN_WINNER_GRACE_MIN: int = Field(default=30, ge=5, description="Grace period for good winners (peak ≥1.5R)")
+    HOLD_BRAIN_LOSER_EVAL_MIN: int = Field(default=15, ge=5, description="Aggressive loser evaluation window (5-15min)")
+    HOLD_BRAIN_DECAY_GIVEBACK_PCT: float = Field(default=0.5, ge=0.1, le=1.0, description="Exit if giveback >50% of peak")
+    HOLD_BRAIN_LOCK_PROFIT_R: float = Field(default=0.3, ge=0.1, le=1.0, description="Profit to lock at 1.0R")
+    HOLD_BRAIN_TRAIL_ATR_MULT: float = Field(default=1.2, ge=0.5, le=5.0, description="ATR multiplier for trailing stop")
+
     # === LOGGING ===
     LOG_LEVEL: str = Field(default="INFO", description="Logging level (DEBUG, INFO, WARNING, ERROR)")
     LOG_FORMAT: str = Field(default="json", description="Log format (json, text)")
