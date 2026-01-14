@@ -212,6 +212,13 @@ class Settings(BaseSettings):
     ENTRY_REGIME_STRICT_VSPIKE_ADD: float = Field(default=0.2, ge=0.0, description="Add to vspike threshold in strict mode (+0.2x)")
     ENTRY_REGIME_LOOSE_RET5M_SUB: float = Field(default=0.001, ge=0.0, description="Subtract from ret5m threshold in loose mode (-0.1%)")
 
+    # Wick filter advanced settings
+    ENTRY_WICK_BODY_MULT: float = Field(default=0.3, ge=0.0, description="Upper wick threshold (0.3 = 30% of body)")
+    ENTRY_WICK_BODY_MIN_PCT: float = Field(default=0.0005, ge=0.0, description="Minimum body size (0.0005 = 0.05%)")
+
+    # Sizing controls
+    EAGER_WALLET_RESERVE_USD: float = Field(default=3.0, ge=0.0, description="Reserve buffer for sizing ($3 default)")
+
     # -------- Near-miss depth snapshot (log only) --------
     SNAPSHOT_DEPTH_TOPK: int = Field(default=3, ge=0, le=10, description="Fetch orderbook for top-K near misses")
     SNAPSHOT_DEPTH_CACHE_SEC: int = Field(default=20, ge=5, le=300, description="Cache TTL for snapshot (sec)")
