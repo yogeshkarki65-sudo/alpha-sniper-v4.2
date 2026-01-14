@@ -939,6 +939,14 @@ async def main():
                             else:
                                 now = time.time()
 
+                                # Log effective thresholds once per cycle
+                                logger.info(
+                                    f"[EAGER_THRESHOLDS] ret5m≥{settings.EARLY_RET_5M_MIN:.4f} "
+                                    f"vsp≥{settings.EARLY_VOL_SPIKE_MIN:.2f} "
+                                    f"score≥{settings.MIN_SCORE} "
+                                    f"depth≥${float(getattr(settings, 'EAGER_MIN_DEPTH_USD', 5000)):.0f}"
+                                )
+
                                 for row in _rows:
                                     # Stop after single attempt (success or failure)
                                     if eager_attempted > 0:
@@ -976,6 +984,82 @@ async def main():
                                     if len(ohlcv) < max(6, lookback_n + 1):
                                         continue
 
+                                    # === NEW ENTRY QUALITY FILTERS ===
+
+                                    # 1. EMA Trend Check
+                                    if getattr(settings, 'ENTRY_TREND_EMA_CHECK_ENABLE', True):
+                                        if len(ohlcv) >= 50:
+                                            closes = [float(x[4]) for x in ohlcv]
+
+                                            # EMA50 on 1m candles
+                                            ema50_mult = 2.0 / (50 + 1)
+                                            ema50 = sum(closes[:50]) / 50
+                                            for price in closes[50:]:
+                                                ema50 = (price - ema50) * ema50_mult + ema50
+
+                                            # EMA20 on 5m (use every 5th candle)
+                                            if len(closes) >= 100:
+                                                closes_5m = [closes[i] for i in range(4, len(closes), 5)]
+                                                if len(closes_5m) >= 20:
+                                                    ema20_mult = 2.0 / (20 + 1)
+                                                    ema20 = sum(closes_5m[:20]) / 20
+                                                    for price in closes_5m[20:]:
+                                                        ema20 = (price - ema20) * ema20_mult + ema20
+
+                                                    current_price = closes[-1]
+                                                    if current_price <= ema50 or current_price <= ema20:
+                                                        logger.info(f"[EAGER_FILTERS] {sym} REJECT=EMA_TREND price={current_price:.4f} ema50={ema50:.4f} ema20={ema20:.4f}")
+                                                        continue
+
+                                    # 2. Acceleration Check (enhanced) - current 5m return > previous 5m return
+                                    if getattr(settings, 'ENTRY_ACCEL_ENABLE', True):
+                                        if len(ohlcv) >= 10:
+                                            closes = [float(x[4]) for x in ohlcv]
+                                            # Current 5m return (last 5 candles)
+                                            ret5m_current = (closes[-1] / closes[-5]) - 1.0
+                                            # Previous 5m return (candles -6 to -10)
+                                            ret5m_previous = (closes[-6] / closes[-10]) - 1.0
+                                            if ret5m_current <= ret5m_previous:
+                                                logger.info(f"[EAGER_FILTERS] {sym} REJECT=ACCEL current={ret5m_current:.4f} prev={ret5m_previous:.4f}")
+                                                continue
+
+                                    # 3. Wick Filter (enhanced)
+                                    if getattr(settings, 'ENTRY_WICK_FILTER_ENABLE', True):
+                                        if len(ohlcv) >= 1:
+                                            last_candle = ohlcv[-1]
+                                            o, h, l, c = float(last_candle[1]), float(last_candle[2]), float(last_candle[3]), float(last_candle[4])
+
+                                            # Body calculation
+                                            body_top = max(o, c)
+                                            body_bottom = min(o, c)
+                                            body = body_top - body_bottom
+                                            upper_wick = h - body_top
+
+                                            # Body percentage relative to entry price
+                                            body_pct = body / c if c > 0 else 0
+
+                                            # Filter criteria: upper_wick > 0.3 * body OR body < 0.05%
+                                            wick_threshold = getattr(settings, 'ENTRY_WICK_BODY_MULT', 0.3)
+                                            body_min_pct = getattr(settings, 'ENTRY_WICK_BODY_MIN_PCT', 0.0005)
+
+                                            if (body > 0 and upper_wick > wick_threshold * body) or body_pct < body_min_pct:
+                                                logger.info(f"[EAGER_FILTERS] {sym} REJECT=WICK upper_wick={upper_wick:.6f} body={body:.6f} body_pct={body_pct:.4%}")
+                                                continue
+
+                                    # 4. BTC Guard - skip longs if BTC is dropping
+                                    if getattr(settings, 'BTC_GUARD_ENABLE', True):
+                                        btc_sym = "BTC/USDT"
+                                        btc_md = market_data.get(btc_sym)
+                                        if btc_md:
+                                            btc_ohlcv = btc_md.get("ohlcv") or []
+                                            if len(btc_ohlcv) >= 5:
+                                                btc_closes = [float(x[4]) for x in btc_ohlcv]
+                                                btc_ret5m = (btc_closes[-1] / btc_closes[-5]) - 1.0
+                                                btc_ret5m_min = getattr(settings, 'BTC_RET5M_MIN', -0.003)
+                                                if btc_ret5m < btc_ret5m_min:
+                                                    logger.info(f"[EAGER_FILTERS] {sym} REJECT=BTC_GUARD btc_ret5m={btc_ret5m:.4%} min={btc_ret5m_min:.4%}")
+                                                    continue
+
                                     highs = [float(x[2]) for x in ohlcv]
                                     lookback_high = max(highs[-(lookback_n+1):-1])
                                     trigger = lookback_high * (1.0 + float(settings.EAGER_EPS_PCT))
@@ -1001,11 +1085,23 @@ async def main():
                                             logger.info(f"[EAGER] {sym} skipped: insufficient balance for auto-bump")
                                             continue
 
+                                    # Apply wallet reserve and cap to prevent oversize orders
+                                    reserve = getattr(settings, 'EAGER_WALLET_RESERVE_USD', 3.0)
+                                    cap = max(0.0, free_usdt - reserve)
+                                    if size_usd > cap:
+                                        logger.info(f"[EAGER] {sym} size capped by reserve: ${size_usd:.2f} → ${cap:.2f} (reserve=${reserve:.2f}, free=${free_usdt:.2f})")
+                                        size_usd = cap
+
                                     # Apply LIVE_TEST_MODE cap if enabled
                                     if settings.LIVE_TEST_MODE and settings.LIVE_TEST_MAX_USD_PER_ORDER:
                                         if size_usd > settings.LIVE_TEST_MAX_USD_PER_ORDER:
                                             logger.info(f"[LIVE_TEST] {sym} size capped ${size_usd:.2f} → ${settings.LIVE_TEST_MAX_USD_PER_ORDER:.2f}")
                                             size_usd = settings.LIVE_TEST_MAX_USD_PER_ORDER
+
+                                    # Check affordability after clamps
+                                    if size_usd < min_viable:
+                                        logger.info(f"[EAGER] {sym} skipped: unaffordable after clamp (need≥${min_viable:.2f}, capped=${size_usd:.2f})")
+                                        continue
 
                                     # --- Affordability quick check: skip markets we can't size for ---
                                     m_check = exchange.markets.get(sym) if hasattr(exchange, "markets") else None

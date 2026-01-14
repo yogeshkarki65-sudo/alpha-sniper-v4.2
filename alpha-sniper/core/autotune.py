@@ -223,8 +223,15 @@ class AutoTunePro:
 
         - If signals/hr < target min: loosen thresholds (lower values)
         - If signals/hr > target max: tighten thresholds (higher values)
+
+        NOTE: Flow-based loosening is now disabled by default (AUTOTUNE_FLOW_ENABLE=False)
+        to prevent oscillation with win-rate-based tightening.
         """
         if not self.s.AUTOTUNE_ENABLE:
+            return
+
+        # Check if flow-based tuning is enabled (disabled by default to prevent oscillation)
+        if not getattr(self.s, 'AUTOTUNE_FLOW_ENABLE', False):
             return
 
         # Cooldown check
@@ -504,6 +511,10 @@ class AutoTunePro:
 
         This helps filter out poor quality signals when strategy is underperforming.
         """
+        # Check if win-rate adjustment is enabled
+        if not getattr(self.s, 'WINRATE_ADJUST_ENABLE', True):
+            return
+
         if not self.db:
             return
 
@@ -513,10 +524,12 @@ class AutoTunePro:
 
         self._last_winrate_check_scan = self._scan_count
 
-        # Also enforce minimum time between adjustments (1 hour)
+        # Enforce dwell time (minimum time between adjustments)
         import time
         now = int(time.time())
-        if now - self._last_winrate_adjustment < 3600:
+        dwell_minutes = getattr(self.s, 'AUTOTUNE_MIN_DWELL_MIN', 60)
+        dwell_seconds = dwell_minutes * 60
+        if now - self._last_winrate_adjustment < dwell_seconds:
             return
 
         try:
@@ -546,13 +559,17 @@ class AutoTunePro:
                 ret5m = float(self.s.EARLY_RET_5M_MIN)
                 vsp = float(self.s.EARLY_VOL_SPIKE_MIN)
 
+                # Get step sizes (with fallback to old parameter names for compatibility)
+                ret_step = getattr(self.s, 'AUTOTUNE_RET5M_STEP', getattr(self.s, 'AUTOTUNE_STEP_RET5M', 0.001))
+                vsp_step = getattr(self.s, 'AUTOTUNE_VSPIKE_STEP', getattr(self.s, 'AUTOTUNE_STEP_VSPIKE', 0.1))
+
                 # Tighten thresholds (increase values for more selectivity)
                 new_ret = self._clamp(
-                    ret5m + 0.002,  # Increase by 0.2%
+                    ret5m + ret_step,
                     *self.s.AUTOTUNE_RET5M_BOUNDS
                 )
                 new_vsp = self._clamp(
-                    vsp + 0.2,  # Increase by 0.2x
+                    vsp + vsp_step,
                     *self.s.AUTOTUNE_VSPIKE_BOUNDS
                 )
 

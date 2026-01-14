@@ -126,14 +126,19 @@ class Settings(BaseSettings):
 
     # === AUTOTUNE PRO (flow-based threshold adjustment) ===
     AUTOTUNE_ENABLE: bool = Field(default=True, description="Enable AutoTune Pro")
+    AUTOTUNE_FLOW_ENABLE: bool = Field(default=False, description="Enable flow-based loosening (disabled to prevent oscillation)")
+    WINRATE_ADJUST_ENABLE: bool = Field(default=True, description="Enable win-rate-based tightening")
+    AUTOTUNE_MIN_DWELL_MIN: int = Field(default=60, ge=10, description="Minimum minutes between adjustments")
     AUTOTUNE_WINDOW_SCANS: int = Field(default=60, ge=10, description="Number of recent scans to consider (~1h if 60s scans)")
     AUTOTUNE_TARGET_MIN_HOURLY: int = Field(default=1, ge=0, description="Minimum target signals per hour")
     AUTOTUNE_TARGET_MAX_HOURLY: int = Field(default=8, ge=1, description="Maximum target signals per hour")
-    AUTOTUNE_STEP_RET5M: float = Field(default=0.001, ge=0.0001, description="Step size for RET5M adjustments (±0.10%)")
-    AUTOTUNE_STEP_VSPIKE: float = Field(default=0.10, ge=0.01, description="Step size for volume spike adjustments (±0.10x)")
+    AUTOTUNE_RET5M_STEP: float = Field(default=0.001, ge=0.0001, description="Step size for RET5M adjustments (±0.10%)")
+    AUTOTUNE_VSPIKE_STEP: float = Field(default=0.1, ge=0.01, description="Step size for volume spike adjustments (±0.10x)")
+    AUTOTUNE_STEP_RET5M: float = Field(default=0.001, ge=0.0001, description="DEPRECATED: Use AUTOTUNE_RET5M_STEP")
+    AUTOTUNE_STEP_VSPIKE: float = Field(default=0.10, ge=0.01, description="DEPRECATED: Use AUTOTUNE_VSPIKE_STEP")
     AUTOTUNE_STEP_SCORE: int = Field(default=1, ge=1, description="Step size for score adjustments (±1)")
-    AUTOTUNE_RET5M_BOUNDS: tuple[float, float] = Field(default=(0.008, 0.035), description="RET5M bounds (0.8%..3.5%)")
-    AUTOTUNE_VSPIKE_BOUNDS: tuple[float, float] = Field(default=(1.10, 4.00), description="Volume spike bounds (1.1x..4.0x)")
+    AUTOTUNE_RET5M_BOUNDS: tuple[float, float] = Field(default=(0.014, 0.035), description="RET5M bounds (1.4%..3.5%)")
+    AUTOTUNE_VSPIKE_BOUNDS: tuple[float, float] = Field(default=(1.8, 4.00), description="Volume spike bounds (1.8x..4.0x)")
     AUTOTUNE_SCORE_BOUNDS: tuple[int, int] = Field(default=(3, 40), description="Score bounds (3..40)")
     AUTOTUNE_COOLDOWN_SCANS: int = Field(default=5, ge=1, description="Minimum scans between adjustments")
 
@@ -183,6 +188,13 @@ class Settings(BaseSettings):
     EAGER_ONLY_LIVE_TEST: bool = Field(default=True, description="Safety: only with LIVE_TEST_MODE")
     EAGER_BACKOFF_SEC: int = Field(default=90, ge=30, le=300, description="Per-symbol cooldown between EAGER attempts (sec)")
     EAGER_MIN_DEPTH_USD: float = Field(default=5000.0, ge=1000.0, le=50000.0, description="Minimum orderbook depth for EAGER (USD)")
+
+    # === ENTRY QUALITY FILTERS (new for win-rate improvement) ===
+    ENTRY_TREND_EMA_CHECK_ENABLE: bool = Field(default=True, description="Require price > EMA50(1m) and EMA20(5m)")
+    ENTRY_ACCEL_ENABLE: bool = Field(default=True, description="Require momentum acceleration (current 5m > previous 5m)")
+    ENTRY_WICK_FILTER_ENABLE: bool = Field(default=True, description="Filter wicks: upper_wick ≤ 0.3×body, body ≥ 0.05%")
+    BTC_GUARD_ENABLE: bool = Field(default=True, description="Skip longs if BTC 5m return drops below threshold")
+    BTC_RET5M_MIN: float = Field(default=-0.003, description="Minimum BTC 5min return (-0.3% = allow small dips)")
 
     # -------- Near-miss depth snapshot (log only) --------
     SNAPSHOT_DEPTH_TOPK: int = Field(default=3, ge=0, le=10, description="Fetch orderbook for top-K near misses")
