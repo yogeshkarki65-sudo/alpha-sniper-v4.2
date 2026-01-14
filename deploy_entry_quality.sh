@@ -95,6 +95,18 @@ echo "=== Monitoring for 30 seconds ==="
 timeout 30s sudo journalctl -u alpha-sniper-async.service -f | grep -E 'EAGER|WINRATE|AUTOTUNE|FILTERS' || true
 
 echo ""
+echo "=== Installing Auto-Tune Service ==="
+if [ -f "/opt/alpha-sniper/install_auto_tune.sh" ]; then
+    echo "Setting up automatic parameter tuning (runs every 6 hours)..."
+    /opt/alpha-sniper/install_auto_tune.sh <<EOF
+y
+EOF
+else
+    echo "⚠️  Auto-tune installer not found. You can install it later with:"
+    echo "   /opt/alpha-sniper/install_auto_tune.sh"
+fi
+
+echo ""
 echo "==================================================================="
 echo "Deployment complete!"
 echo "==================================================================="
