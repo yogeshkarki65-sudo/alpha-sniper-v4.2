@@ -1,14 +1,25 @@
 #!/bin/bash
 # deploy_entry_quality.sh - Deploy Entry Quality Improvements
+# Run this script from the production server at /opt/alpha-sniper/alpha-sniper
 
-cd /opt/alpha-sniper/alpha-sniper
+set -e  # Exit on error
 
 echo "=== Deploying Entry Quality Improvements ==="
+echo ""
+
+# Check we're in the right directory
+if [ ! -f "app_async.py" ]; then
+    echo "ERROR: Must run from /opt/alpha-sniper/alpha-sniper directory"
+    exit 1
+fi
 
 # Stop service
+echo "Stopping service..."
 sudo systemctl stop alpha-sniper-async.service
 
 # Pull latest code
+echo ""
+echo "Pulling latest code from branch..."
 git fetch origin claude/fix-issues-018PzVLhR8jpyJBusPvozqDS
 git reset --hard origin/claude/fix-issues-018PzVLhR8jpyJBusPvozqDS
 
@@ -55,13 +66,15 @@ python scripts/overrides_cli.py set --key EAGER_WALLET_RESERVE_USD --value 3.0
 deactivate
 
 # Start service
+echo ""
+echo "Starting service..."
 sudo systemctl start alpha-sniper-async.service
 sleep 3
 sudo systemctl status alpha-sniper-async.service --no-pager
 
 echo ""
 echo "=== Monitoring for 30 seconds ==="
-timeout 30s sudo journalctl -u alpha-sniper-async.service -f | grep -E 'EAGER|WINRATE|AUTOTUNE|FILTERS'
+timeout 30s sudo journalctl -u alpha-sniper-async.service -f | grep -E 'EAGER|WINRATE|AUTOTUNE|FILTERS' || true
 
 echo ""
 echo "==================================================================="
@@ -73,7 +86,7 @@ echo "  - No more flow-based loosening (AUTOTUNE_PRO logs)"
 echo "  - Winrate adjustments every ~60 min max"
 echo "  - Tighter entry thresholds (1.8% momentum, 2x volume)"
 echo "  - Entry filter rejections logged as [EAGER_FILTERS]"
-echo "  - Sizing capped by reserve buffer (no more $350 on $170 balance)"
+echo "  - Sizing capped by reserve buffer (no more \$350 on \$170 balance)"
 echo "  - Fewer but higher quality trades"
 echo ""
 echo "Monitoring commands:"
