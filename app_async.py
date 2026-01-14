@@ -698,17 +698,69 @@ async def main():
             await telegram.start()
             logger.info("Telegram initialized")
 
-            # Send startup notification
-            equity = await risk.get_real_equity_async(exchange)
-            await telegram.send(
-                f"🚀 Alpha Sniper v4.2 ASYNC\n"
-                f"Mode: {settings.MODE}\n"
-                f"Exchange: {settings.EXCHANGE_ID}\n"
-                f"Universe: {settings.UNIVERSE_SIZE} symbols\n"
-                f"Equity: ${equity:.2f}\n"
-                f"Test Mode: {settings.LIVE_TEST_MODE}\n"
-                f"Status: ✅ ONLINE"
-            )
+            # Send startup notification with detailed balance breakdown
+            try:
+                # Fetch balance details
+                balance = await exchange.fetch_balance()
+                free_usdt = float(balance.get('free', {}).get('USDT', 0.0))
+                total_usdt = float(balance.get('total', {}).get('USDT', 0.0))
+
+                # Get open positions
+                positions = await risk.get_open_positions_async()
+                num_positions = len(positions)
+
+                # Calculate unrealized PnL
+                unrealized_pnl = 0.0
+                position_value = 0.0
+                for pos in positions:
+                    try:
+                        symbol = pos.get('symbol')
+                        entry = pos.get('entry_price', 0)
+                        qty = pos.get('qty', 0)
+                        side = pos.get('side', 'buy')
+
+                        ticker = await exchange.fetch_ticker(symbol)
+                        current_price = ticker.get('last', 0)
+
+                        position_value += current_price * qty
+                        if side == 'buy':
+                            unrealized_pnl += (current_price - entry) * qty
+                        else:
+                            unrealized_pnl += (entry - current_price) * qty
+                    except Exception:
+                        pass
+
+                total_equity = total_usdt + unrealized_pnl
+
+                # Build detailed startup message
+                msg = (
+                    f"🚀 Alpha Sniper v4.2 ASYNC\n"
+                    f"Mode: {settings.MODE}\n"
+                    f"Exchange: {settings.EXCHANGE_ID}\n"
+                    f"Universe: {settings.UNIVERSE_SIZE} symbols\n"
+                    f"\n💰 Account Balance:\n"
+                    f"  Free USDT: ${free_usdt:.2f}\n"
+                    f"  In Positions: ${position_value:.2f} ({num_positions} open)\n"
+                    f"  Unrealized P&L: ${unrealized_pnl:+.2f}\n"
+                    f"  Total Equity: ${total_equity:.2f}\n"
+                    f"\n⚙️ Test Mode: {settings.LIVE_TEST_MODE}\n"
+                    f"Status: ✅ ONLINE"
+                )
+                await telegram.send(msg)
+
+            except Exception as e:
+                logger.warning(f"Failed to get detailed balance for startup notification: {e}")
+                # Fallback to simple equity display
+                equity = await risk.get_real_equity_async(exchange)
+                await telegram.send(
+                    f"🚀 Alpha Sniper v4.2 ASYNC\n"
+                    f"Mode: {settings.MODE}\n"
+                    f"Exchange: {settings.EXCHANGE_ID}\n"
+                    f"Universe: {settings.UNIVERSE_SIZE} symbols\n"
+                    f"Equity: ${equity:.2f}\n"
+                    f"Test Mode: {settings.LIVE_TEST_MODE}\n"
+                    f"Status: ✅ ONLINE"
+                )
         else:
             logger.info("Telegram disabled or not configured")
 
