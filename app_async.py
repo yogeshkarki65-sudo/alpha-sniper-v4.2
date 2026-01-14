@@ -703,13 +703,42 @@ async def main():
                 # Fetch balance details
                 balance = await exchange.fetch_balance()
                 free_usdt = float(balance.get('free', {}).get('USDT', 0.0))
-                total_usdt = float(balance.get('total', {}).get('USDT', 0.0))
+                total_balances = balance.get('total', {})
 
-                # Get open positions
+                # Calculate total portfolio value in USD
+                total_portfolio_usd = 0.0
+                other_assets_usd = 0.0
+                asset_breakdown = []
+
+                for asset, amount in total_balances.items():
+                    amount = float(amount)
+                    if amount < 0.00001:  # Skip dust
+                        continue
+
+                    if asset == 'USDT':
+                        total_portfolio_usd += amount
+                    else:
+                        # Convert asset to USD value
+                        try:
+                            symbol = f"{asset}/USDT"
+                            ticker = await exchange.fetch_ticker(symbol)
+                            price = float(ticker.get('last', 0))
+                            asset_value_usd = amount * price
+                            total_portfolio_usd += asset_value_usd
+                            other_assets_usd += asset_value_usd
+
+                            # Track significant holdings (>$1)
+                            if asset_value_usd > 1.0:
+                                asset_breakdown.append(f"    {asset}: {amount:.4f} (${asset_value_usd:.2f})")
+                        except Exception:
+                            # If can't fetch price, skip this asset
+                            pass
+
+                # Get open positions from database
                 positions = await risk.get_open_positions_async()
                 num_positions = len(positions)
 
-                # Calculate unrealized PnL
+                # Calculate unrealized PnL on tracked positions
                 unrealized_pnl = 0.0
                 position_value = 0.0
                 for pos in positions:
@@ -730,22 +759,35 @@ async def main():
                     except Exception:
                         pass
 
-                total_equity = total_usdt + unrealized_pnl
-
                 # Build detailed startup message
                 msg = (
                     f"🚀 Alpha Sniper v4.2 ASYNC\n"
                     f"Mode: {settings.MODE}\n"
                     f"Exchange: {settings.EXCHANGE_ID}\n"
                     f"Universe: {settings.UNIVERSE_SIZE} symbols\n"
-                    f"\n💰 Account Balance:\n"
-                    f"  Free USDT: ${free_usdt:.2f}\n"
-                    f"  In Positions: ${position_value:.2f} ({num_positions} open)\n"
-                    f"  Unrealized P&L: ${unrealized_pnl:+.2f}\n"
-                    f"  Total Equity: ${total_equity:.2f}\n"
-                    f"\n⚙️ Test Mode: {settings.LIVE_TEST_MODE}\n"
-                    f"Status: ✅ ONLINE"
+                    f"\n💰 Total Portfolio Value: ${total_portfolio_usd:.2f}\n"
+                    f"\n📊 Breakdown:\n"
+                    f"  • Free USDT: ${free_usdt:.2f}\n"
+                    f"  • Other Assets: ${other_assets_usd:.2f}\n"
                 )
+
+                # Add asset breakdown if we have significant holdings
+                if asset_breakdown:
+                    msg += "\n" + "\n".join(asset_breakdown[:5]) + "\n"  # Show top 5
+
+                # Add position info
+                if num_positions > 0:
+                    msg += (
+                        f"\n📈 Active Positions: {num_positions}\n"
+                        f"  • Position Value: ${position_value:.2f}\n"
+                        f"  • Unrealized P&L: ${unrealized_pnl:+.2f}\n"
+                    )
+                else:
+                    msg += f"\n📈 Active Positions: 0\n"
+
+                msg += f"\n⚙️ Test Mode: {settings.LIVE_TEST_MODE}\n"
+                msg += f"Status: ✅ ONLINE"
+
                 await telegram.send(msg)
 
             except Exception as e:
