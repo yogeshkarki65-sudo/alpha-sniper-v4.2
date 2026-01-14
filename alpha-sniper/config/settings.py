@@ -196,6 +196,22 @@ class Settings(BaseSettings):
     BTC_GUARD_ENABLE: bool = Field(default=True, description="Skip longs if BTC 5m return drops below threshold")
     BTC_RET5M_MIN: float = Field(default=-0.003, description="Minimum BTC 5min return (-0.3% = allow small dips)")
 
+    # Spread cap filter (rejects illiquid books with wide bid-ask spreads)
+    ENTRY_SPREAD_CAP_ENABLE: bool = Field(default=True, description="Enable spread cap filter (reject wide spreads)")
+    ENTRY_SPREAD_MAX_PCT: float = Field(default=0.0030, ge=0.0001, description="Maximum bid-ask spread allowed (0.30%)")
+
+    # Volume quality filter (requires sustained volume, not just one-print manipulation)
+    ENTRY_VOLUME_QUALITY_ENABLE: bool = Field(default=True, description="Enable volume quality filter (sustained volume check)")
+    ENTRY_VOLUME_QUALITY_MULT: float = Field(default=4.0, ge=1.0, description="Require 3-bar avg volume > X times 20-bar avg")
+
+    # Regime-aware threshold adjustment (tighten in BTC downtrends, loosen in uptrends)
+    ENTRY_REGIME_AWARE_ENABLE: bool = Field(default=True, description="Enable regime-aware threshold adjustments based on BTC")
+    ENTRY_REGIME_STRICT_BTC_PCT: float = Field(default=-0.005, description="BTC 5m threshold for strict mode (-0.5%)")
+    ENTRY_REGIME_LOOSE_BTC_PCT: float = Field(default=0.005, description="BTC 5m threshold for loose mode (+0.5%)")
+    ENTRY_REGIME_STRICT_RET5M_ADD: float = Field(default=0.002, ge=0.0, description="Add to ret5m threshold in strict mode (+0.2%)")
+    ENTRY_REGIME_STRICT_VSPIKE_ADD: float = Field(default=0.2, ge=0.0, description="Add to vspike threshold in strict mode (+0.2x)")
+    ENTRY_REGIME_LOOSE_RET5M_SUB: float = Field(default=0.001, ge=0.0, description="Subtract from ret5m threshold in loose mode (-0.1%)")
+
     # -------- Near-miss depth snapshot (log only) --------
     SNAPSHOT_DEPTH_TOPK: int = Field(default=3, ge=0, le=10, description="Fetch orderbook for top-K near misses")
     SNAPSHOT_DEPTH_CACHE_SEC: int = Field(default=20, ge=5, le=300, description="Cache TTL for snapshot (sec)")

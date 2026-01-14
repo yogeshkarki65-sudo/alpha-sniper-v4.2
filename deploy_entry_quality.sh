@@ -51,13 +51,31 @@ python scripts/overrides_cli.py set --key WINRATE_ADJUST_ENABLE --value true
 python scripts/overrides_cli.py set --key AUTOTUNE_MIN_DWELL_MIN --value 60
 
 echo ""
-echo "=== Applying Entry Quality Filters ==="
-# Entry filters (now implemented)
+echo "=== Applying Entry Quality Filters (v1) ==="
+# Original 4 filters
 python scripts/overrides_cli.py set --key ENTRY_TREND_EMA_CHECK_ENABLE --value true
 python scripts/overrides_cli.py set --key ENTRY_ACCEL_ENABLE --value true
 python scripts/overrides_cli.py set --key ENTRY_WICK_FILTER_ENABLE --value true
 python scripts/overrides_cli.py set --key BTC_GUARD_ENABLE --value true
 python scripts/overrides_cli.py set --key BTC_RET5M_MIN --value -0.003
+
+echo ""
+echo "=== Applying Advanced Filters (v2) ==="
+# Spread cap filter (rejects illiquid books)
+python scripts/overrides_cli.py set --key ENTRY_SPREAD_CAP_ENABLE --value true
+python scripts/overrides_cli.py set --key ENTRY_SPREAD_MAX_PCT --value 0.0030
+
+# Volume quality filter (sustained volume, not one-print manipulation)
+python scripts/overrides_cli.py set --key ENTRY_VOLUME_QUALITY_ENABLE --value true
+python scripts/overrides_cli.py set --key ENTRY_VOLUME_QUALITY_MULT --value 4.0
+
+# Regime-aware thresholds (dynamic adjustment based on BTC)
+python scripts/overrides_cli.py set --key ENTRY_REGIME_AWARE_ENABLE --value true
+python scripts/overrides_cli.py set --key ENTRY_REGIME_STRICT_BTC_PCT --value -0.005
+python scripts/overrides_cli.py set --key ENTRY_REGIME_LOOSE_BTC_PCT --value 0.005
+python scripts/overrides_cli.py set --key ENTRY_REGIME_STRICT_RET5M_ADD --value 0.002
+python scripts/overrides_cli.py set --key ENTRY_REGIME_STRICT_VSPIKE_ADD --value 0.2
+python scripts/overrides_cli.py set --key ENTRY_REGIME_LOOSE_RET5M_SUB --value 0.001
 
 echo ""
 echo "=== Applying Sizing Controls ==="
@@ -82,15 +100,26 @@ echo "Deployment complete!"
 echo "==================================================================="
 echo ""
 echo "Expected behavior:"
-echo "  - No more flow-based loosening (AUTOTUNE_PRO logs)"
-echo "  - Winrate adjustments every ~60 min max"
-echo "  - Tighter entry thresholds (1.8% momentum, 2x volume)"
-echo "  - Entry filter rejections logged as [EAGER_FILTERS]"
-echo "  - Sizing capped by reserve buffer (no more \$350 on \$170 balance)"
-echo "  - Fewer but higher quality trades"
+echo "  ✅ No more flow-based loosening (AUTOTUNE_PRO logs)"
+echo "  ✅ Winrate adjustments every ~60 min max"
+echo "  ✅ Tighter entry thresholds (1.8% momentum, 2x volume)"
+echo "  ✅ 7 entry filters active (EMA, ACCEL, WICK, BTC, SPREAD, VOL_QUALITY, REGIME)"
+echo "  ✅ Entry filter rejections logged as [EAGER_FILTERS]"
+echo "  ✅ Regime-aware: stricter in BTC downtrends, looser in uptrends"
+echo "  ✅ Sizing capped by reserve buffer (no more \$350 on \$170 balance)"
+echo "  ✅ Fewer but higher quality trades (target 30-40% winrate)"
 echo ""
 echo "Monitoring commands:"
+echo "  cd /opt/alpha-sniper/alpha-sniper"
+echo ""
+echo "  # Quick dashboard (recommended):"
+echo "  ./monitor_entry_quality.sh \"6 hours ago\""
+echo ""
+echo "  # Get tuning suggestions:"
+echo "  ./suggest_tuning.sh \"6 hours ago\""
+echo ""
+echo "  # Live tail filters:"
 echo "  sudo journalctl -u alpha-sniper-async.service -f | grep EAGER_THRESHOLDS"
 echo "  sudo journalctl -u alpha-sniper-async.service -f | grep EAGER_FILTERS"
-echo "  sudo journalctl -u alpha-sniper-async.service -f | grep AUTOTUNE"
+echo "  sudo journalctl -u alpha-sniper-async.service -f | grep REGIME"
 echo ""

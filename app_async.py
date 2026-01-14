@@ -1140,7 +1140,8 @@ async def main():
                                                 logger.info(f"[EAGER_FILTERS] {sym} REJECT=WICK upper_wick={upper_wick:.6f} body={body:.6f} body_pct={body_pct:.4%}")
                                                 continue
 
-                                    # 4. BTC Guard - skip longs if BTC is dropping
+                                    # 4. BTC Guard - skip longs if BTC is dropping (also used for regime-aware thresholds)
+                                    btc_ret5m = 0.0
                                     if getattr(settings, 'BTC_GUARD_ENABLE', True):
                                         btc_sym = "BTC/USDT"
                                         btc_md = market_data.get(btc_sym)
@@ -1153,6 +1154,61 @@ async def main():
                                                 if btc_ret5m < btc_ret5m_min:
                                                     logger.info(f"[EAGER_FILTERS] {sym} REJECT=BTC_GUARD btc_ret5m={btc_ret5m:.4%} min={btc_ret5m_min:.4%}")
                                                     continue
+
+                                    # 5. Spread Cap Filter - reject wide bid-ask spreads (illiquid books)
+                                    if getattr(settings, 'ENTRY_SPREAD_CAP_ENABLE', True):
+                                        try:
+                                            # Fetch order book to check spread
+                                            ob = await exchange.fetch_order_book(sym, limit=5)
+                                            bids = ob.get("bids", [])
+                                            asks = ob.get("asks", [])
+                                            if bids and asks:
+                                                best_bid = float(bids[0][0])
+                                                best_ask = float(asks[0][0])
+                                                spread_pct = (best_ask - best_bid) / best_bid if best_bid > 0 else 0
+                                                max_spread = getattr(settings, 'ENTRY_SPREAD_MAX_PCT', 0.0030)  # 0.30%
+                                                if spread_pct > max_spread:
+                                                    logger.info(f"[EAGER_FILTERS] {sym} REJECT=SPREAD spread={spread_pct:.4%} max={max_spread:.4%}")
+                                                    continue
+                                        except Exception as e:
+                                            logger.warning(f"[EAGER_FILTERS] {sym} failed to check spread: {e}")
+
+                                    # 6. Volume Quality Filter - require sustained volume, not just one-print manipulation
+                                    if getattr(settings, 'ENTRY_VOLUME_QUALITY_ENABLE', True):
+                                        if len(ohlcv) >= 21:
+                                            vols = [float(x[5]) for x in ohlcv]
+                                            # Last 3 bars average volume
+                                            vol_3bar_avg = sum(vols[-3:]) / 3.0
+                                            # 20-bar average volume
+                                            vol_20bar_avg = sum(vols[-21:-1]) / 20.0 if len(vols) >= 21 else 1.0
+                                            # Require 3-bar avg to be X times the 20-bar avg (sustained volume)
+                                            quality_mult = getattr(settings, 'ENTRY_VOLUME_QUALITY_MULT', 4.0)
+                                            if vol_20bar_avg > 0 and vol_3bar_avg < quality_mult * vol_20bar_avg:
+                                                logger.info(f"[EAGER_FILTERS] {sym} REJECT=VOL_QUALITY 3bar={vol_3bar_avg:.0f} need={quality_mult:.1f}x{vol_20bar_avg:.0f}")
+                                                continue
+
+                                    # 7. Regime-Aware Threshold Adjustment - tighten in BTC downtrends, loosen in uptrends
+                                    effective_ret5m = float(settings.EARLY_RET_5M_MIN)
+                                    effective_vspike = float(settings.EARLY_VOL_SPIKE_MIN)
+
+                                    if getattr(settings, 'ENTRY_REGIME_AWARE_ENABLE', True) and btc_ret5m != 0.0:
+                                        regime_strict_threshold = getattr(settings, 'ENTRY_REGIME_STRICT_BTC_PCT', -0.005)  # -0.5%
+                                        regime_loose_threshold = getattr(settings, 'ENTRY_REGIME_LOOSE_BTC_PCT', 0.005)   # +0.5%
+
+                                        if btc_ret5m < regime_strict_threshold:
+                                            # BTC down >0.5% - be more selective
+                                            effective_ret5m += getattr(settings, 'ENTRY_REGIME_STRICT_RET5M_ADD', 0.002)
+                                            effective_vspike += getattr(settings, 'ENTRY_REGIME_STRICT_VSPIKE_ADD', 0.2)
+                                            logger.info(f"[EAGER_FILTERS] {sym} REGIME=STRICT btc={btc_ret5m:.4%} ret5m→{effective_ret5m:.4f} vsp→{effective_vspike:.2f}")
+                                        elif btc_ret5m > regime_loose_threshold:
+                                            # BTC up >0.5% - ride the beta tailwind
+                                            effective_ret5m -= getattr(settings, 'ENTRY_REGIME_LOOSE_RET5M_SUB', 0.001)
+                                            logger.info(f"[EAGER_FILTERS] {sym} REGIME=LOOSE btc={btc_ret5m:.4%} ret5m→{effective_ret5m:.4f}")
+
+                                        # Apply regime-adjusted thresholds
+                                        if row["ret5m"] < effective_ret5m or row["vspike"] < effective_vspike:
+                                            logger.info(f"[EAGER_FILTERS] {sym} REJECT=REGIME_THRESHOLD ret5m={row['ret5m']:.4f}<{effective_ret5m:.4f} or vsp={row['vspike']:.2f}<{effective_vspike:.2f}")
+                                            continue
 
                                     highs = [float(x[2]) for x in ohlcv]
                                     lookback_high = max(highs[-(lookback_n+1):-1])
