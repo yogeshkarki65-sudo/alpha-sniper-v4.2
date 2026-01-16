@@ -87,6 +87,17 @@ def main():
         try:
             overlay.set(args.key, v)
             print(f"OK: {args.key} = {v}")
+
+            # Auto-sync vspike keys for consistency
+            if args.key in ("EARLY_VOL_SPIKE_MIN", "EAGER_VSPIKE_MIN"):
+                other = "EAGER_VSPIKE_MIN" if args.key == "EARLY_VOL_SPIKE_MIN" else "EARLY_VOL_SPIKE_MIN"
+                try:
+                    overlay.set(other, v)
+                    print(f"SYNC: Set both {args.key} and {other} to {v} for consistency.")
+                except AttributeError:
+                    # Other key might not exist, that's ok
+                    pass
+
         except AttributeError as e:
             sys.exit(f"ERROR: {e}")
         return

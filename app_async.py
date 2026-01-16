@@ -19,6 +19,7 @@ import sys
 import time
 import uuid
 from pathlib import Path
+from collections import Counter
 
 # Add alpha-sniper to path
 sys.path.insert(0, str(Path(__file__).parent / "alpha-sniper"))
@@ -54,6 +55,16 @@ EAGER_BACKOFF_SEC = 90   # Default, can be overridden by settings
 
 # Global stop event for graceful shutdown
 stop_event = asyncio.Event()
+
+
+def effective_vspike_min(settings) -> float:
+    """Single source of truth for vspike threshold.
+    Returns EAGER_VSPIKE_MIN if set, else EARLY_VOL_SPIKE_MIN, else 1.8 default.
+    """
+    return float(
+        getattr(settings, "EAGER_VSPIKE_MIN",
+        getattr(settings, "EARLY_VOL_SPIKE_MIN", 1.8))
+    )
 
 
 def setup_signal_handlers():
@@ -1034,12 +1045,15 @@ async def main():
                                 now = time.time()
 
                                 # Log effective thresholds once per cycle
-                                logger.info(
-                                    f"[EAGER_THRESHOLDS] ret5m≥{settings.EARLY_RET_5M_MIN:.4f} "
-                                    f"vsp≥{settings.EARLY_VOL_SPIKE_MIN:.2f} "
-                                    f"score≥{settings.MIN_SCORE} "
-                                    f"depth≥${float(getattr(settings, 'EAGER_MIN_DEPTH_USD', 5000)):.0f}"
-                                )
+                                ret5m = float(settings.EARLY_RET_5M_MIN)
+                                vsp = effective_vspike_min(settings)
+                                score = int(settings.MIN_SCORE)
+                                depth = float(getattr(settings, "EAGER_MIN_DEPTH_USD", 8000))
+                                eps = float(getattr(settings, "EAGER_EPS_PCT", 0.0012))
+                                logger.info(f"[EAGER_THRESHOLDS] ret5m≥{ret5m:.4f} vsp≥{vsp:.2f} score≥{score} depth≥${depth:.0f} eps={eps:.4f}")
+
+                                # Initialize filter rejection counter
+                                filter_stats = Counter()
 
                                 for row in _rows:
                                     # Stop after single attempt (success or failure)
@@ -1047,29 +1061,39 @@ async def main():
                                         break
 
                                     # Arm conditions: big vspike & not too negative over 5m; must not be a wick
-                                    if row["vspike"] < float(settings.EAGER_VSPIKE_MIN):
+                                    sym = row["symbol"]
+
+                                    if row["vspike"] < effective_vspike_min(settings):
+                                        filter_stats["VSPIKE"] += 1
+                                        logger.info(f"[EAGER_FILTERS] {sym} REJECT=VSPIKE have={row['vspike']:.2f} need≥{effective_vspike_min(settings):.2f}")
                                         continue
                                     if row["ret5m"] < float(settings.EAGER_MAX_NEG_RET5M):
+                                        filter_stats["RET5M"] += 1
+                                        logger.info(f"[EAGER_FILTERS] {sym} REJECT=RET5M have={row['ret5m']:.4f} need≥{float(settings.EAGER_MAX_NEG_RET5M):.4f}")
+                                        continue
+                                    if row["score"] < score:
+                                        filter_stats["SCORE"] += 1
+                                        logger.info(f"[EAGER_FILTERS] {sym} REJECT=SCORE have={row['score']} need≥{score}")
                                         continue
                                     if row["wick"]:
-                                        continue
+                                        continue  # Already filtered by wick filter below
                                     if getattr(settings, "EAGER_REQUIRE_ACCEL", False) and (not row["accel"]):
-                                        continue
+                                        continue  # Already filtered by accel filter below
 
-                                    sym = row["symbol"]
                                     eager_candidates += 1
 
                                     # Cooldown check
                                     last_attempt = EAGER_LAST_ATTEMPT.get(sym, 0)
                                     if now - last_attempt < backoff_sec:
-                                        continue
+                                        continue  # No filter stat, this is cooldown
 
                                     # Depth check (use EAGER-specific threshold)
                                     depth_usd = row.get("depth", 0.0)
                                     depth_floor = float(getattr(settings, "EAGER_MIN_DEPTH_USD",
                                                        getattr(settings, "MIN_DEPTH_USD_ABSOLUTE", 5000.0)))
                                     if depth_usd > 0 and depth_usd < depth_floor:
-                                        logger.info(f"[EAGER] {sym} skipped: depth ${depth_usd:.0f} < floor ${depth_floor:.0f}")
+                                        filter_stats["DEPTH"] += 1
+                                        logger.info(f"[EAGER_FILTERS] {sym} REJECT=DEPTH have=${depth_usd:.0f} need≥${depth_floor:.0f}")
                                         continue
 
                                     md = market_data.get(sym) or {}
@@ -1102,6 +1126,7 @@ async def main():
 
                                                     current_price = closes[-1]
                                                     if current_price <= ema50 or current_price <= ema20:
+                                                        filter_stats["EMA_TREND"] += 1
                                                         logger.info(f"[EAGER_FILTERS] {sym} REJECT=EMA_TREND price={current_price:.4f} ema50={ema50:.4f} ema20={ema20:.4f}")
                                                         continue
 
@@ -1114,6 +1139,7 @@ async def main():
                                             # Previous 5m return (candles -6 to -10)
                                             ret5m_previous = (closes[-6] / closes[-10]) - 1.0
                                             if ret5m_current <= ret5m_previous:
+                                                filter_stats["ACCEL"] += 1
                                                 logger.info(f"[EAGER_FILTERS] {sym} REJECT=ACCEL current={ret5m_current:.4f} prev={ret5m_previous:.4f}")
                                                 continue
 
@@ -1137,6 +1163,7 @@ async def main():
                                             body_min_pct = getattr(settings, 'ENTRY_WICK_BODY_MIN_PCT', 0.0005)
 
                                             if (body > 0 and upper_wick > wick_threshold * body) or body_pct < body_min_pct:
+                                                filter_stats["WICK"] += 1
                                                 logger.info(f"[EAGER_FILTERS] {sym} REJECT=WICK upper_wick={upper_wick:.6f} body={body:.6f} body_pct={body_pct:.4%}")
                                                 continue
 
@@ -1152,6 +1179,7 @@ async def main():
                                                 btc_ret5m = (btc_closes[-1] / btc_closes[-5]) - 1.0
                                                 btc_ret5m_min = getattr(settings, 'BTC_RET5M_MIN', -0.003)
                                                 if btc_ret5m < btc_ret5m_min:
+                                                    filter_stats["BTC_GUARD"] += 1
                                                     logger.info(f"[EAGER_FILTERS] {sym} REJECT=BTC_GUARD btc_ret5m={btc_ret5m:.4%} min={btc_ret5m_min:.4%}")
                                                     continue
 
@@ -1168,6 +1196,7 @@ async def main():
                                                 spread_pct = (best_ask - best_bid) / best_bid if best_bid > 0 else 0
                                                 max_spread = getattr(settings, 'ENTRY_SPREAD_MAX_PCT', 0.0030)  # 0.30%
                                                 if spread_pct > max_spread:
+                                                    filter_stats["SPREAD"] += 1
                                                     logger.info(f"[EAGER_FILTERS] {sym} REJECT=SPREAD spread={spread_pct:.4%} max={max_spread:.4%}")
                                                     continue
                                         except Exception as e:
@@ -1184,12 +1213,13 @@ async def main():
                                             # Require 3-bar avg to be X times the 20-bar avg (sustained volume)
                                             quality_mult = getattr(settings, 'ENTRY_VOLUME_QUALITY_MULT', 4.0)
                                             if vol_20bar_avg > 0 and vol_3bar_avg < quality_mult * vol_20bar_avg:
+                                                filter_stats["VOL_QUALITY"] += 1
                                                 logger.info(f"[EAGER_FILTERS] {sym} REJECT=VOL_QUALITY 3bar={vol_3bar_avg:.0f} need={quality_mult:.1f}x{vol_20bar_avg:.0f}")
                                                 continue
 
                                     # 7. Regime-Aware Threshold Adjustment - tighten in BTC downtrends, loosen in uptrends
                                     effective_ret5m = float(settings.EARLY_RET_5M_MIN)
-                                    effective_vspike = float(settings.EARLY_VOL_SPIKE_MIN)
+                                    effective_vspike = effective_vspike_min(settings)
 
                                     if getattr(settings, 'ENTRY_REGIME_AWARE_ENABLE', True) and btc_ret5m != 0.0:
                                         regime_strict_threshold = getattr(settings, 'ENTRY_REGIME_STRICT_BTC_PCT', -0.005)  # -0.5%
@@ -1207,7 +1237,8 @@ async def main():
 
                                         # Apply regime-adjusted thresholds
                                         if row["ret5m"] < effective_ret5m or row["vspike"] < effective_vspike:
-                                            logger.info(f"[EAGER_FILTERS] {sym} REJECT=REGIME_THRESHOLD ret5m={row['ret5m']:.4f}<{effective_ret5m:.4f} or vsp={row['vspike']:.2f}<{effective_vspike:.2f}")
+                                            filter_stats["REGIME"] += 1
+                                            logger.info(f"[EAGER_FILTERS] {sym} REJECT=REGIME ret5m={row['ret5m']:.4f}<{effective_ret5m:.4f} or vsp={row['vspike']:.2f}<{effective_vspike:.2f}")
                                             continue
 
                                     highs = [float(x[2]) for x in ohlcv]
@@ -1236,7 +1267,7 @@ async def main():
                                             continue
 
                                     # Apply wallet reserve and cap to prevent oversize orders
-                                    reserve = getattr(settings, 'EAGER_WALLET_RESERVE_USD', 3.0)
+                                    reserve = float(getattr(settings, 'EAGER_WALLET_RESERVE_USD', 5.0))
                                     cap = max(0.0, free_usdt - reserve)
                                     if size_usd > cap:
                                         logger.info(f"[EAGER] {sym} size capped by reserve: ${size_usd:.2f} → ${cap:.2f} (reserve=${reserve:.2f}, free=${free_usdt:.2f})")
@@ -1250,13 +1281,13 @@ async def main():
 
                                     # Check affordability after clamps
                                     if size_usd < min_viable:
-                                        logger.info(f"[EAGER] {sym} skipped: unaffordable after clamp (need≥${min_viable:.2f}, capped=${size_usd:.2f})")
+                                        logger.info(f"[EAGER] SKIP_AFTER_PASS {sym} reason=unaffordable (need≥${min_viable:.2f}, capped=${size_usd:.2f})")
                                         continue
 
                                     # --- Affordability quick check: skip markets we can't size for ---
                                     m_check = exchange.markets.get(sym) if hasattr(exchange, "markets") else None
                                     if not m_check:
-                                        logger.info(f"[EAGER] {sym} skipped: no market meta")
+                                        logger.info(f"[EAGER] SKIP_AFTER_PASS {sym} reason=no_market_meta")
                                         continue
 
                                     limits_check = m_check.get("limits") or {}
@@ -1272,7 +1303,7 @@ async def main():
                                     need_notional = max(float(min_cost_check or 0.0), need_qty * entry_px)
 
                                     if need_notional > free_usdt * 0.98:
-                                        logger.info(f"[EAGER] {sym} skipped: unaffordable (need≥${need_notional:.2f}, free=${free_usdt:.2f})")
+                                        logger.info(f"[EAGER] SKIP_AFTER_PASS {sym} reason=unaffordable (need≥${need_notional:.2f}, free=${free_usdt:.2f})")
                                         continue
 
                                     # Validate order and get rounded px/qty
@@ -1295,6 +1326,9 @@ async def main():
                                     safe_sym = sym.replace("/", "").replace("-", "")
                                     client_oid = f"eager-{safe_sym}-{int(now*1000)}"
 
+                                    # Log placement attempt with all details
+                                    logger.info(f"[EAGER_PLACE] {sym} notional=${size_usd:.2f} qty={validated_qty} eps={eps:.4f} price={validated_px:.6f} min_cost=${min_cost_check:.2f} free=${free_usdt:.2f}")
+
                                     try:
                                         order = await exchange.create_order_idempotent(
                                             symbol=sym,
@@ -1306,27 +1340,42 @@ async def main():
                                             client_oid=client_oid
                                         )
                                     except Exception as e:
-                                        logger.info(f"[EAGER] {sym} create_order failed: {e}")
+                                        logger.info(f"[EAGER_CANCEL] {sym} reason=create_order_exception error={e}")
                                         break  # Stop after attempt
 
                                     if order and order.get("id"):
-                                        tp = validated_px * (1.0 + float(settings.EAGER_TP_PCT))
-                                        pos = {
-                                            "symbol": sym, "side": "long", "engine": "pump",
-                                            "entry_price": validated_px, "stop_loss": sl_price,
-                                            "tp_2r": tp, "tp_4r": tp,
-                                            "qty": validated_qty, "size_usd": size_usd,
-                                            "initial_risk_usd": size_usd * float(settings.EAGER_SL_PCT),
-                                            "timestamp_open": int(time.time()),
-                                            "max_hold_hours": max(0.25, float(getattr(settings, "HOLD_BRAIN_MAX_HOLD_HOURS", 8.0)))
-                                        }
-                                        await risk.add_position_async(pos)
-                                        autotune.on_trade_opened()  # Track trade timing for quiet market detection
-                                        logger.info(f"[EAGER] OPENED {sym} @ {validated_px:.8f} size=${size_usd:.2f} tp={tp:.8f} sl={sl_price:.8f}")
-                                        eager_opened += 1
+                                        # Check if order was filled
+                                        filled_qty = float(order.get("filled", 0))
+                                        avg_px = float(order.get("average", validated_px))
+
+                                        if filled_qty > 0:
+                                            logger.info(f"[EAGER_FILLED] {sym} qty={filled_qty} avg={avg_px:.6f}")
+
+                                            tp = validated_px * (1.0 + float(settings.EAGER_TP_PCT))
+                                            pos = {
+                                                "symbol": sym, "side": "long", "engine": "pump",
+                                                "entry_price": avg_px, "stop_loss": sl_price,
+                                                "tp_2r": tp, "tp_4r": tp,
+                                                "qty": filled_qty, "size_usd": filled_qty * avg_px,
+                                                "initial_risk_usd": filled_qty * avg_px * float(settings.EAGER_SL_PCT),
+                                                "timestamp_open": int(time.time()),
+                                                "max_hold_hours": max(0.25, float(getattr(settings, "HOLD_BRAIN_MAX_HOLD_HOURS", 8.0)))
+                                            }
+                                            await risk.add_position_async(pos)
+                                            autotune.on_trade_opened()  # Track trade timing for quiet market detection
+                                            logger.info(f"[EAGER] OPENED {sym} @ {avg_px:.8f} size=${filled_qty * avg_px:.2f} tp={tp:.8f} sl={sl_price:.8f}")
+                                            eager_opened += 1
+                                        else:
+                                            logger.info(f"[EAGER_CANCEL] {sym} reason=IOC_NOFILL")
+                                    else:
+                                        logger.info(f"[EAGER_CANCEL] {sym} reason=no_order_id")
 
                                     # Break after first attempt regardless of outcome
                                     break
+
+                            # Filter rejection summary
+                            summary = " ".join(f"{k}={filter_stats[k]}" for k in sorted(filter_stats))
+                            logger.info(f"[EAGER_FILTER_SUMMARY] {summary or 'none'}")
 
                             # Telemetry summary
                             logger.info(
