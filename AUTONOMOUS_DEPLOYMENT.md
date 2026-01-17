@@ -78,7 +78,83 @@ crontab -l | grep alpha_autotune
 /opt/alpha-sniper/scripts/alpha_autotune.sh
 
 # Expected output:
-# alpha_autotune: n=15 wr=18.5 ret=0.020 vsp=1.90 risk=0.0020 action=TUNE:TIGHTEN
+# alpha_autotune: n=15 wr=18.5 avg_pnl=0.020 ret=0.020 vsp=1.90 risk=0.0020 action=TUNE:TIGHTEN
+```
+
+### Step 4: Configure Telegram Notifications (Optional)
+
+**Setup Telegram Bot:**
+
+1. **Create bot via @BotFather:**
+   - Open Telegram and search for `@BotFather`
+   - Send `/newbot` and follow instructions
+   - Save your **bot token** (e.g., `110201543:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw`)
+
+2. **Get your chat ID:**
+   - Send `/start` to your new bot
+   - Visit: `https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates`
+   - Look for `"chat":{"id":123456789}` and save the **chat ID**
+
+3. **Add credentials to environment:**
+   ```bash
+   # Edit .env file
+   nano /opt/alpha-sniper/.env
+
+   # Add these lines:
+   TELEGRAM_BOT_TOKEN="your_bot_token_here"
+   TELEGRAM_CHAT_ID="your_chat_id_here"
+   ```
+
+4. **Test notifications:**
+   ```bash
+   cd /opt/alpha-sniper && source venv/bin/activate
+   python scripts/telegram_notify.py --severity success "✅ Bot configured and ready!"
+   deactivate
+   ```
+
+**What gets notified:**
+- ⚙️ Auto-tune parameter adjustments (every 6 hours)
+- ✅ Optimal performance status
+- 🔴 Low winrate warnings (tightening filters)
+- 🟢 High winrate celebrations (loosening filters)
+- 🚨 Critical alerts (parameters at bounds, low trade volume)
+
+**Silence notifications:**
+Simply remove or comment out the `TELEGRAM_BOT_TOKEN` from `.env` - notifications will fail silently without breaking automation.
+
+**Example notifications:**
+
+```
+⚙️ Alpha Sniper
+
+🟢 AUTO-TUNE: Loosening filters
+📊 Performance (6h): 28 trades, 35.7% WR, P&L $0.0023
+⚙️ New settings: ret5m=0.018 vsp=1.80 risk=0.0020
+📈 Action: TUNE:LOOSEN_GENTLE
+
+2026-01-17 14:32:15
+```
+
+```
+⚙️ Alpha Sniper
+
+✅ AUTO-TUNE: System performing optimally
+📊 Performance (6h): 42 trades, 38.5% WR, P&L $0.0031
+⚙️ Current settings: ret5m=0.018 vsp=1.80 risk=0.0020
+🎯 Status: No changes needed
+
+2026-01-17 20:05:42
+```
+
+```
+⚙️ Alpha Sniper
+
+🚨 AUTO-TUNE: Low trade volume (vspike at minimum)
+📊 Performance (6h): 3 trades, 33.3% WR, P&L $0.0005
+⚠️ Current settings: ret5m=0.019 vsp=1.60 (MIN) risk=0.0020
+🔍 Status: Check market conditions or filter rejections
+
+2026-01-17 02:18:33
 ```
 
 ---
@@ -160,17 +236,40 @@ Actions:
 
 ## ⚙️ Auto-Tuner Behavior
 
-### Decision Logic
+### Enhanced Decision Logic
 
-The auto-tuner runs every 6 hours and makes decisions based on performance:
+The auto-tuner runs every 6 hours and makes intelligent decisions based on trade count, winrate, and profitability:
 
+#### Trade Volume Thresholds
+| Trades | Winrate | Avg P&L | Action | Changes |
+|--------|---------|---------|--------|---------|
+| < 10 | Any | Any | Seed flow | Lower vspike by 0.10 (min 1.60) |
+| 10-19 | < 20% | Any | Tighten + seed | +0.001 ret5m |
+| 10-19 | ≥ 20% | Any | Seed flow | Lower vspike by 0.10 |
+
+#### Quality Optimization (≥20 trades)
+| Winrate | Avg P&L | Trade Count | Action | Changes |
+|---------|---------|-------------|--------|---------|
+| < 25% | Any | ≥ 20 | Tighten aggressively | +0.001 ret5m, +0.10 vspike |
+| 25-30% | Positive | ≥ 40 | Loosen gently | -0.001 ret5m |
+| 25-30% | Positive | 20-39 | Hold | Monitor profitability |
+| 25-30% | Negative | ≥ 20 | Tighten gently | +0.001 ret5m |
+| 30-35% | Positive | ≥ 20 | Loosen gently | -0.001 ret5m |
+| 30-35% | Negative | ≥ 20 | Hold | Check R-ratio |
+| 35-40% | Positive | ≥ 20 | Hold (optimal) | No changes |
+| 35-40% | Negative | ≥ 20 | Tighten gently | +0.001 ret5m (R-ratio fix) |
+| ≥ 40% | Any | ≥ 20 | Loosen | -0.001 ret5m |
+
+#### Risk Sizing (if SIZING_AUTOPILOT_ENABLE=true)
 | Trades | Winrate | Action | Changes |
 |--------|---------|--------|---------|
-| < 20 | Any | Seed flow | Lower vspike by 0.10 (down to 1.60) |
-| ≥ 20 | < 25% | Tighten | +0.001 ret5m, +0.10 vspike |
-| ≥ 30 | ≥ 40% | Loosen | -0.001 ret5m |
-| ≥ 10 | ≥ 35% | Scale risk up | +0.0002 risk (if SIZING_AUTOPILOT_ENABLE=true) |
-| ≥ 10 | ≤ 20% | Scale risk down | -0.0002 risk (if SIZING_AUTOPILOT_ENABLE=true) |
+| ≥ 10 | ≥ 35% | Scale risk up | +0.0002 risk (max 0.30%) |
+| ≥ 10 | ≤ 20% | Scale risk down | -0.0002 risk (min 0.10%) |
+
+#### Bounded Parameter Recovery
+- When ret5m hits max (3.5%) and WR still < 25%, reduces risk instead of further tightening
+- When vspike hits min (1.60) and trades < 10, holds (cannot loosen further)
+- Automatic service restart when parameters change (requires systemd)
 
 ### Safe Bounds
 
@@ -226,6 +325,22 @@ END{
 ```bash
 tail -f /opt/alpha-sniper/logs/autotune.log
 ```
+
+**Enhanced log format includes avg P&L:**
+```
+alpha_autotune: n=25 wr=32.5 avg_pnl=0.0018 ret=0.019 vsp=1.80 risk=0.0020 action=TUNE:LOOSEN_GENTLE
+alpha_autotune: n=15 wr=28.0 avg_pnl=-0.0005 ret=0.020 vsp=1.80 risk=0.0020 action=TUNE:TIGHTEN_GENTLE
+alpha_autotune: n=42 wr=38.5 avg_pnl=0.0025 ret=0.018 vsp=1.80 risk=0.0020 action=HOLD:WR_35-40_OPTIMAL
+```
+
+**Action codes:**
+- `TUNE:TIGHTEN` - Aggressive tightening (WR < 25%)
+- `TUNE:TIGHTEN_GENTLE` - Slight tightening (WR 25-40%, not profitable)
+- `TUNE:LOOSEN` - Standard loosening (WR ≥ 40%)
+- `TUNE:LOOSEN_GENTLE` - Slight loosening (WR 25-35%, profitable)
+- `TUNE:SEED_FLOW` - Lowering vspike to increase trade volume
+- `HOLD:*` - No parameter changes, monitoring specific scenario
+- `[SERVICE_RESTARTED]` - Bot restarted to apply new parameters
 
 ### Filter Breakdown (Last 10 Minutes)
 ```bash
