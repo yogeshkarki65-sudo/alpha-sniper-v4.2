@@ -52,6 +52,11 @@ venv.bak/
 # python cache
 __pycache__/
 *.pyc
+.pytest_cache/
+.ruff_cache/
+
+# test files in root
+test_*.py
 
 # never commit gh auth
 .config/gh/
