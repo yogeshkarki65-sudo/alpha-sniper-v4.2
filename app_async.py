@@ -1366,9 +1366,9 @@ async def main():
                                         break  # Stop after attempt
 
                                     if order and order.get("id"):
-                                        # Check if order was filled
-                                        filled_qty = float(order.get("filled", 0))
-                                        avg_px = float(order.get("average", validated_px))
+                                        # Check if order was filled (handle None values from exchange)
+                                        filled_qty = float(order.get("filled") or 0)
+                                        avg_px = float(order.get("average") or validated_px)
 
                                         if filled_qty > 0:
                                             logger.info(f"[EAGER_FILLED] {sym} qty={filled_qty} avg={avg_px:.6f}")
