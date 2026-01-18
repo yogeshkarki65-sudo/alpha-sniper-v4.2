@@ -56,6 +56,8 @@ class Settings(BaseSettings):
     TELEGRAM_CHAT_ID: Optional[str] = Field(default=None, description="Telegram chat ID")
     TELEGRAM_ENABLED: bool = Field(default=True, description="Enable Telegram notifications")
     TELEGRAM_MAX_QUEUE: int = Field(default=500, ge=10, description="Max queued messages")
+    TELEGRAM_ACTION_NEEDED_ENABLE: bool = Field(default=True, description="Enable 'action needed' low-noise pings")
+    TELEGRAM_ACTION_COOLDOWN_MIN: int = Field(default=30, ge=5, description="Min minutes between action-needed pings")
 
     # === MODE SETTINGS ===
     MODE: str = Field(default="LIVE", description="Trading mode: LIVE or SIM")
@@ -65,6 +67,10 @@ class Settings(BaseSettings):
     MAX_PORTFOLIO_HEAT: float = Field(default=0.012, ge=0.001, le=0.1, description="Max portfolio heat")
     MAX_CONCURRENT_POSITIONS: int = Field(default=5, ge=1, le=20, description="Max concurrent positions")
     RISK_PER_TRADE: float = Field(default=0.0025, ge=0.0001, le=0.05, description="Risk per trade")
+
+    # === NOTIONAL SIZING MODE (alternative to risk-based sizing) ===
+    SIZING_MODE: str = Field(default="risk", description="Sizing mode: 'risk' (default, RISK_PER_TRADE) or 'notional' (fixed USD per trade)")
+    SIZING_NOTIONAL_USD: float = Field(default=5.0, ge=1.0, le=1000.0, description="Fixed notional USD per trade (when SIZING_MODE='notional')")
 
     # === AUTO-BUMP TO EXCHANGE MINIMUMS ===
     AUTO_BUMP_ENABLE: bool = Field(

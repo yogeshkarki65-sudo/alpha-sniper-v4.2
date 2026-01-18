@@ -28,7 +28,7 @@ def main():
     ap = argparse.ArgumentParser(description="Manage runtime setting overrides")
     ap.add_argument(
         "cmd",
-        choices=["show", "get", "set", "reset"],
+        choices=["show", "get", "set", "reset", "notional"],
         help="Command to execute"
     )
     ap.add_argument("--key", help="Setting key")
@@ -112,6 +112,31 @@ def main():
             # Reset all
             overlay.reset()
             print("OK: Reset all overrides")
+        return
+
+    if args.cmd == "notional":
+        # Convenience command: set notional sizing mode
+        if not args.value:
+            sys.exit("ERROR: --value required for 'notional' command (specify USD amount, e.g., --value 5.0)")
+
+        try:
+            notional_usd = float(args.value)
+            if notional_usd < 1.0 or notional_usd > 1000.0:
+                sys.exit(f"ERROR: Notional USD must be between 1.0 and 1000.0, got {notional_usd}")
+
+            # Set both SIZING_MODE and SIZING_NOTIONAL_USD
+            overlay.set("SIZING_MODE", "notional")
+            overlay.set("SIZING_NOTIONAL_USD", notional_usd)
+
+            print(f"OK: Enabled notional sizing mode")
+            print(f"  SIZING_MODE = 'notional'")
+            print(f"  SIZING_NOTIONAL_USD = ${notional_usd:.2f}")
+            print(f"\nBot will now use fixed ${notional_usd:.2f} per trade (subject to exchange minimums and balance).")
+
+        except ValueError:
+            sys.exit(f"ERROR: Invalid value '{args.value}', must be a number")
+        except AttributeError as e:
+            sys.exit(f"ERROR: {e}")
         return
 
 

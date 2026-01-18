@@ -30,6 +30,7 @@ from core.exchange_async import AsyncExchange
 from core.autotune import AutoTunePro
 from db.async_driver import AsyncDB
 from notify.telegram_async import AsyncTelegram
+from notify.action_needed import ActionNeededNotifier
 from scanner.runner import scan_symbols, MarketDataCache
 from universe.select import select_top_liquid_symbols_with_cache
 from signals.pump_engine import PumpEngine
@@ -699,6 +700,7 @@ async def main():
 
         # Initialize Telegram (if configured)
         telegram = None
+        action_notifier = None
         if settings.TELEGRAM_ENABLED and settings.TELEGRAM_TOKEN and settings.TELEGRAM_CHAT_ID:
             logger.info("Initializing Telegram...")
             telegram = AsyncTelegram(
@@ -708,6 +710,10 @@ async def main():
             )
             await telegram.start()
             logger.info("Telegram initialized")
+
+            # Initialize action-needed notifier
+            action_notifier = ActionNeededNotifier(telegram, settings, logger)
+            logger.info("Action-needed notifier initialized")
 
             # Send startup notification with detailed balance breakdown
             try:
@@ -800,6 +806,12 @@ async def main():
                 msg += f"Status: ✅ ONLINE"
 
                 await telegram.send(msg)
+
+                # Send action-needed restart notification with sizing info
+                if action_notifier:
+                    sizing_mode = getattr(settings, "SIZING_MODE", "risk")
+                    sizing_notional = getattr(settings, "SIZING_NOTIONAL_USD", 5.0)
+                    await action_notifier.notify_restart(sizing_mode, sizing_notional, settings.RISK_PER_TRADE)
 
             except Exception as e:
                 logger.warning(f"Failed to get detailed balance for startup notification: {e}")
@@ -1044,13 +1056,18 @@ async def main():
                             else:
                                 now = time.time()
 
-                                # Log effective thresholds once per cycle
+                                # Log effective thresholds once per cycle (with sizing info)
                                 ret5m = float(settings.EARLY_RET_5M_MIN)
                                 vsp = effective_vspike_min(settings)
                                 score = int(settings.MIN_SCORE)
                                 depth = float(getattr(settings, "EAGER_MIN_DEPTH_USD", 8000))
                                 eps = float(getattr(settings, "EAGER_EPS_PCT", 0.0012))
-                                logger.info(f"[EAGER_THRESHOLDS] ret5m≥{ret5m:.4f} vsp≥{vsp:.2f} score≥{score} depth≥${depth:.0f} eps={eps:.4f}")
+                                sizing_mode = getattr(settings, "SIZING_MODE", "risk")
+                                if sizing_mode == "notional":
+                                    sizing_info = f"notional=${getattr(settings, 'SIZING_NOTIONAL_USD', 5.0):.2f}"
+                                else:
+                                    sizing_info = f"risk={settings.RISK_PER_TRADE:.4f}"
+                                logger.info(f"[EAGER_THRESHOLDS] ret5m≥{ret5m:.4f} vsp≥{vsp:.2f} score≥{score} depth≥${depth:.0f} eps={eps:.4f} sizing={sizing_info}")
 
                                 # Initialize filter rejection counter
                                 filter_stats = Counter()
@@ -1075,17 +1092,21 @@ async def main():
                                         filter_stats["SCORE"] += 1
                                         logger.info(f"[EAGER_FILTERS] {sym} REJECT=SCORE have={row['score']} need≥{score}")
                                         continue
+                                    # Note: wick and accel are checked more thoroughly below in ENTRY_WICK_FILTER_ENABLE and ENTRY_ACCEL_ENABLE
                                     if row["wick"]:
-                                        continue  # Already filtered by wick filter below
+                                        filter_stats["WICK_EARLY"] += 1
+                                        continue
                                     if getattr(settings, "EAGER_REQUIRE_ACCEL", False) and (not row["accel"]):
-                                        continue  # Already filtered by accel filter below
+                                        filter_stats["ACCEL_EARLY"] += 1
+                                        continue
 
                                     eager_candidates += 1
 
                                     # Cooldown check
                                     last_attempt = EAGER_LAST_ATTEMPT.get(sym, 0)
                                     if now - last_attempt < backoff_sec:
-                                        continue  # No filter stat, this is cooldown
+                                        filter_stats["COOLDOWN"] += 1
+                                        continue
 
                                     # Depth check (use EAGER-specific threshold)
                                     depth_usd = row.get("depth", 0.0)
@@ -1100,6 +1121,7 @@ async def main():
                                     ohlcv = md.get("ohlcv") or []
                                     lookback_n = int(getattr(settings, "EAGER_LOOKBACK_HIGH_N", 5))
                                     if len(ohlcv) < max(6, lookback_n + 1):
+                                        filter_stats["NO_DATA"] += 1
                                         continue
 
                                     # === NEW ENTRY QUALITY FILTERS ===
