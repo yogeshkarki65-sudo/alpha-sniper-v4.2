@@ -31,6 +31,7 @@ from core.autotune import AutoTunePro
 from db.async_driver import AsyncDB
 from notify.telegram_async import AsyncTelegram
 from notify.action_needed import ActionNeededNotifier
+from utils.telegram_alerts import TelegramAlertManager
 from scanner.runner import scan_symbols, MarketDataCache
 from universe.select import select_top_liquid_symbols_with_cache
 from signals.pump_engine import PumpEngine
@@ -700,6 +701,7 @@ async def main():
 
         # Initialize Telegram (if configured)
         telegram = None
+        telegram_alerts = None
         action_notifier = None
         if settings.TELEGRAM_ENABLED and settings.TELEGRAM_TOKEN and settings.TELEGRAM_CHAT_ID:
             logger.info("Initializing Telegram...")
@@ -710,6 +712,10 @@ async def main():
             )
             await telegram.start()
             logger.info("Telegram initialized")
+
+            # Initialize telegram alert manager for trade notifications
+            telegram_alerts = TelegramAlertManager(settings, logger, telegram)
+            logger.info("Telegram alert manager initialized")
 
             # Initialize action-needed notifier
             action_notifier = ActionNeededNotifier(telegram, settings, logger)
@@ -1399,6 +1405,26 @@ async def main():
                                             autotune.on_trade_opened()  # Track trade timing for quiet market detection
                                             logger.info(f"[EAGER] OPENED {sym} @ {avg_px:.8f} size=${filled_qty * avg_px:.2f} tp={tp:.8f} sl={sl_price:.8f}")
                                             eager_opened += 1
+
+                                            # Send Telegram notification for trade open
+                                            if telegram_alerts:
+                                                try:
+                                                    risk_pct = float(settings.EAGER_SL_PCT) * 100  # Convert to percentage
+                                                    telegram_alerts.send_trade_open(
+                                                        symbol=sym,
+                                                        side="LONG",
+                                                        engine="EAGER",
+                                                        regime="UNKNOWN",  # Can be enhanced later
+                                                        size=filled_qty,
+                                                        entry=avg_px,
+                                                        stop=sl_price,
+                                                        target=tp,
+                                                        leverage=1.0,
+                                                        risk_pct=risk_pct,
+                                                        r_multiple=None
+                                                    )
+                                                except Exception as e:
+                                                    logger.warning(f"Failed to send Telegram trade open notification: {e}")
                                         else:
                                             logger.info(f"[EAGER_CANCEL] {sym} reason=IOC_NOFILL")
                                     else:
