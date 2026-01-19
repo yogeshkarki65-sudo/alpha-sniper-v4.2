@@ -1366,9 +1366,21 @@ async def main():
                                         break  # Stop after attempt
 
                                     if order and order.get("id"):
-                                        # Check if order was filled (handle None values from exchange)
-                                        filled_qty = float(order.get("filled") or 0)
-                                        avg_px = float(order.get("average") or validated_px)
+                                        order_id = order.get("id")
+
+                                        # For IOC orders, the create_order response may not include fill info
+                                        # Fetch the order status separately to get accurate fill details
+                                        try:
+                                            await asyncio.sleep(0.5)  # Brief delay for exchange to process
+                                            fetched_order = await exchange.fetch_order(order_id, sym)
+                                            filled_qty = float(fetched_order.get("filled") or 0)
+                                            avg_px = float(fetched_order.get("average") or validated_px)
+                                            logger.info(f"[EAGER_IOC_STATUS] {sym} order_id={order_id} filled={filled_qty} status={fetched_order.get('status')}")
+                                        except Exception as e:
+                                            # Fallback to original order response if fetch fails
+                                            logger.warning(f"[EAGER_IOC_FETCH_FAILED] {sym} error={e}, using original response")
+                                            filled_qty = float(order.get("filled") or 0)
+                                            avg_px = float(order.get("average") or validated_px)
 
                                         if filled_qty > 0:
                                             logger.info(f"[EAGER_FILLED] {sym} qty={filled_qty} avg={avg_px:.6f}")
