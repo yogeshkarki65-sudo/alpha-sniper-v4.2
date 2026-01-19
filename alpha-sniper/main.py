@@ -10,25 +10,23 @@ Features:
 - Telegram alerts
 - Fast Stop Manager (dual async loops)
 """
-import time
-import schedule
-import signal
-import sys
 import argparse
 import asyncio
+import signal
+import time
 from datetime import datetime, timezone
 
+import schedule
 from config import get_config
-from utils import setup_logger
+from exchange import create_exchange
+from risk_engine import RiskEngine
+from signals.scanner import Scanner
+from utils import helpers, setup_logger
 from utils.dynamic_filters import update_dynamic_filters
 from utils.entry_dete import EntryDETEngine
 from utils.pump_trailer import PumpTrailer
 from utils.telegram import TelegramNotifier
 from utils.telegram_alerts import TelegramAlertManager
-from utils import helpers
-from exchange import create_exchange
-from risk_engine import RiskEngine
-from signals.scanner import Scanner
 
 
 class AlphaSniperBot:
@@ -43,10 +41,9 @@ class AlphaSniperBot:
         self.logger = setup_logger()
 
         # Log startup
-        mode_str = "SIM" if self.config.sim_mode else "LIVE"
         self.logger.info("=" * 60)
         self.logger.info("🚀 Alpha Sniper V4.2 Starting...")
-        self.logger.info(f"🔧 Mode: {mode_str}")
+        self.logger.info("🔧 Mode: LIVE")
         self.logger.info(f"💰 Starting Equity: ${self.config.starting_equity:.2f}")
         self.logger.info("=" * 60)
 
@@ -96,18 +93,25 @@ class AlphaSniperBot:
             self.logger.info(f"⚡ FAST MODE ENABLED: {self.config.fast_scan_interval_seconds}s intervals")
             self.logger.info(f"   Will auto-disable after {self.config.fast_mode_max_runtime_hours} hours")
 
+        # === v4.2.3: Live test mode tracking ===
+        self.live_test_orders_today = 0
+        self.live_test_reset_date = time.strftime("%Y-%m-%d")
+        if self.config.live_test_mode:
+            self.logger.info("")
+            self.logger.info("🧪 LIVE TEST MODE ENABLED:")
+            self.logger.info(f"   Max orders per day: {self.config.max_live_test_orders_per_day}")
+            self.logger.info(f"   Max USD per order: ${self.config.max_live_test_usd_per_order:.2f}")
+            self.logger.info(f"   Auto-cancel timeout: {self.config.live_test_cancel_timeout_seconds}s")
+            self.logger.info("")
+
         # Send enhanced startup notification
-        sim_data_source = getattr(self.config, 'sim_data_source', 'FAKE')
         regime = self.risk_engine.current_regime if self.risk_engine.current_regime else 'UNKNOWN'
 
-        mode_str = 'SIM' if self.config.sim_mode else 'LIVE'
-        data_source = sim_data_source if self.config.sim_mode else 'LIVE'
-
-        self.logger.info(f"[TELEGRAM] Sending enhanced startup notification")
+        self.logger.info("[TELEGRAM] Sending enhanced startup notification")
         self.alert_mgr.send_startup(
-            mode=mode_str,
+            mode='LIVE',
             pump_only=self.config.pump_only_mode,
-            data_source=data_source,
+            data_source='LIVE',
             equity=self.config.starting_equity,
             regime=regime
         )
@@ -123,26 +127,31 @@ class AlphaSniperBot:
         Main trading cycle - runs every scan interval
         """
         try:
-            # Sync equity from MEXC in LIVE mode
-            if not self.config.sim_mode:
-                try:
-                    live_equity = self.exchange.get_total_usdt_balance()
-                    if live_equity is not None and live_equity > 0:
-                        old_equity = self.risk_engine.current_equity
-                        self.risk_engine.update_equity(live_equity)
+            # Sync equity from MEXC
+            try:
+                live_equity = self.exchange.get_total_usdt_balance()
+                if live_equity is not None and live_equity > 0:
+                    old_equity = self.risk_engine.current_equity
+                    self.risk_engine.update_equity(live_equity)
 
-                        # Send enhanced Telegram notification on first equity sync
-                        if not self.first_equity_sync_notified and abs(old_equity - self.config.starting_equity) < 0.01 and abs(live_equity - old_equity) > 0.01:
-                            self.alert_mgr.send_equity_sync(
-                                config_equity=self.config.starting_equity,
-                                mexc_balance=live_equity
-                            )
-                            self.logger.info(f"[TELEGRAM] Sent enhanced equity sync notification")
-                            self.first_equity_sync_notified = True
-                    else:
-                        self.logger.warning("⚠️ Failed to fetch MEXC balance, using cached equity")
-                except Exception as e:
-                    self.logger.error(f"⚠️ Error syncing MEXC equity: {e}, using cached equity")
+                    # Send enhanced Telegram notification on first equity sync
+                    old_diff = abs(old_equity - self.config.starting_equity)
+                    equity_diff = abs(live_equity - old_equity)
+                    if (
+                        not self.first_equity_sync_notified
+                        and old_diff < 0.01
+                        and equity_diff > 0.01
+                    ):
+                        self.alert_mgr.send_equity_sync(
+                            config_equity=self.config.starting_equity,
+                            mexc_balance=live_equity
+                        )
+                        self.logger.info("[TELEGRAM] Sent enhanced equity sync notification")
+                        self.first_equity_sync_notified = True
+                else:
+                    self.logger.warning("⚠️ Failed to fetch MEXC balance, using cached equity")
+            except Exception as e:
+                self.logger.error(f"⚠️ Error syncing MEXC equity: {e}, using cached equity")
 
             # Enhanced cycle header with key info
             cycle_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -151,7 +160,12 @@ class AlphaSniperBot:
 
             self.logger.info("")
             self.logger.info("=" * 70)
-            self.logger.info(f"🔄 New cycle | t={cycle_time} | regime={regime} | sim={self.config.sim_mode} | equity=${self.risk_engine.current_equity:.2f} | open_positions={open_pos}")
+            cycle_header = (
+                f"🔄 New cycle | t={cycle_time} | regime={regime} | "
+                f"equity=${self.risk_engine.current_equity:.2f} | "
+                f"open_positions={open_pos}"
+            )
+            self.logger.info(cycle_header)
             self.logger.info("=" * 70)
 
             # 1. Check daily reset
@@ -169,7 +183,7 @@ class AlphaSniperBot:
                     ticker = self.exchange.get_ticker('BTC/USDT')
                     if ticker:
                         btc_price = ticker.get('last', ticker.get('close', 0))
-                except:
+                except Exception:
                     pass
                 self.alert_mgr.send_regime_change(old_regime, new_regime, btc_price)
                 self.logger.info(f"[TELEGRAM] Sent regime change notification: {old_regime} → {new_regime}")
@@ -204,19 +218,18 @@ class AlphaSniperBot:
             try:
                 current_time = time.time()
                 if current_time - self.last_error_notification >= self.error_notification_cooldown:
-                    mode = "SIM" if self.config.sim_mode else "LIVE"
                     error_type = type(e).__name__
                     error_msg = str(e)[:200]  # Limit to 200 chars
-                    self.logger.info(f"[TELEGRAM] Sending critical error notification")
+                    self.logger.info("[TELEGRAM] Sending critical error notification")
                     self.telegram.send(
-                        f"🚨 [{mode}] CRITICAL ERROR\n"
+                        f"🚨 [LIVE] CRITICAL ERROR\n"
                         f"Type: {error_type}\n"
                         f"Message: {error_msg}\n"
                         f"Bot will attempt to continue...\n"
                         f"(Rate limited: max 1 alert per 15 min)"
                     )
                     self.last_error_notification = current_time
-            except:
+            except Exception:
                 pass  # Don't crash on Telegram failure
 
     def _manage_positions(self):
@@ -273,7 +286,7 @@ class AlphaSniperBot:
                     position['stop_loss'] = entry_price
                     try:
                         self.logger.info(f"[EXIT] Breakeven activated for {symbol}: {float(unrealized_r):.2f}R")
-                    except:
+                    except Exception:
                         self.logger.info(f"[EXIT] Breakeven activated for {symbol}")
 
                 # Exit improvement: Partial TP (50%) at +2R
@@ -281,22 +294,21 @@ class AlphaSniperBot:
                     qty = position.get('qty', 0)
                     partial_qty = qty * 0.5
 
-                    # Execute the partial close order (LIVE mode)
-                    if not self.config.sim_mode:
-                        try:
-                            close_side = 'sell' if side == 'long' else 'buy'
-                            order = self.exchange.create_order(
-                                symbol=symbol,
-                                type='market',
-                                side=close_side,
-                                amount=partial_qty
-                            )
-                            if not order or not order.get('id'):
-                                self.logger.error(f"[EXIT] Partial TP order failed for {symbol}")
-                                continue
-                        except Exception as e:
-                            self.logger.error(f"[EXIT] Failed to execute partial TP for {symbol}: {e}")
+                    # Execute the partial close order
+                    try:
+                        close_side = 'sell' if side == 'long' else 'buy'
+                        order = self.exchange.create_order(
+                            symbol=symbol,
+                            type='market',
+                            side=close_side,
+                            amount=partial_qty
+                        )
+                        if not order or not order.get('id'):
+                            self.logger.error(f"[EXIT] Partial TP order failed for {symbol}")
                             continue
+                    except Exception as e:
+                        self.logger.error(f"[EXIT] Failed to execute partial TP for {symbol}: {e}")
+                        continue
 
                     # Mark as taken and update position tracking
                     position['partial_tp_taken'] = True
@@ -400,7 +412,7 @@ class AlphaSniperBot:
                     position['stop_loss'] = entry_price
                     try:
                         self.logger.info(f"[EXIT] Breakeven activated for {symbol}: {float(unrealized_r):.2f}R")
-                    except:
+                    except Exception:
                         self.logger.info(f"[EXIT] Breakeven activated for {symbol}")
 
                 # Exit improvement: Partial TP (50%) at +2R
@@ -408,22 +420,21 @@ class AlphaSniperBot:
                     qty = position.get('qty', 0)
                     partial_qty = qty * 0.5
 
-                    # Execute the partial close order (LIVE mode)
-                    if not self.config.sim_mode:
-                        try:
-                            close_side = 'sell' if side == 'long' else 'buy'
-                            order = self.exchange.create_order(
-                                symbol=symbol,
-                                type='market',
-                                side=close_side,
-                                amount=partial_qty
-                            )
-                            if not order or not order.get('id'):
-                                self.logger.error(f"[EXIT] Partial TP order failed for {symbol}")
-                                continue
-                        except Exception as e:
-                            self.logger.error(f"[EXIT] Failed to execute partial TP for {symbol}: {e}")
+                    # Execute the partial close order
+                    try:
+                        close_side = 'sell' if side == 'long' else 'buy'
+                        order = self.exchange.create_order(
+                            symbol=symbol,
+                            type='market',
+                            side=close_side,
+                            amount=partial_qty
+                        )
+                        if not order or not order.get('id'):
+                            self.logger.error(f"[EXIT] Partial TP order failed for {symbol}")
                             continue
+                    except Exception as e:
+                        self.logger.error(f"[EXIT] Failed to execute partial TP for {symbol}: {e}")
+                        continue
 
                     # Mark as taken and update position tracking
                     position['partial_tp_taken'] = True
@@ -542,122 +553,210 @@ class AlphaSniperBot:
                 self.logger.debug(f"[PumpTrailer] Error updating {position.get('symbol', 'UNKNOWN')}: {e}")
                 continue
 
+    def _check_live_test_limits(self, size_usd: float, symbol: str) -> tuple[bool, float, str]:
+        """
+        Check and enforce live test mode limits
+
+        Returns:
+            (allowed: bool, adjusted_size: float, reason: str)
+        """
+        if not self.config.live_test_mode:
+            return True, size_usd, ""
+
+        # Check if we need to reset daily counter (new day)
+        current_date = time.strftime("%Y-%m-%d")
+        if current_date != self.live_test_reset_date:
+            self.logger.info(f"[LIVE_TEST] Daily counter reset (new day: {current_date})")
+            self.live_test_orders_today = 0
+            self.live_test_reset_date = current_date
+
+        # Check daily order limit
+        if self.live_test_orders_today >= self.config.max_live_test_orders_per_day:
+            return False, 0, f"LIVE_TEST_DAILY_LIMIT_REACHED ({self.live_test_orders_today}/{self.config.max_live_test_orders_per_day})"
+
+        # Adjust size if exceeds per-order limit
+        adjusted_size = min(size_usd, self.config.max_live_test_usd_per_order)
+        if adjusted_size < size_usd:
+            self.logger.info(
+                f"[LIVE_TEST] Limiting order size for {symbol}: "
+                f"${size_usd:.2f} → ${adjusted_size:.2f} (max ${self.config.max_live_test_usd_per_order:.2f})"
+            )
+
+        # Increment counter
+        self.live_test_orders_today += 1
+
+        return True, adjusted_size, ""
+
     def _process_signals(self, signals: list):
         """
-        Process new trading signals
+        Process new trading signals with comprehensive validation and lifecycle logging
         """
         self.logger.info(f"📡 Processing {len(signals)} signal(s)...")
 
         signals_opened = 0
         signals_queued = 0
 
-        for signal in signals:
+        # === v4.2.3: Skip reason tracking ===
+        skip_reasons = {}  # {reason_code: count}
+
+        def add_skip_reason(reason: str):
+            """Track skip reasons for aggregate summary"""
+            skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
+
+        for sig in signals:
             try:
-                # Check if we can open new position
-                can_open, reason = self.risk_engine.can_open_new_position(signal)
+                # Check if we can open new position (CORE filters)
+                can_open, reason = self.risk_engine.can_open_new_position(sig)
 
                 if not can_open:
-                    self.logger.debug(f"❌ Cannot open {signal['symbol']} {signal['engine']}: {reason}")
+                    add_skip_reason("CORE_" + reason.replace(" ", "_").upper()[:30])
+                    self.logger.debug(f"❌ Cannot open {sig['symbol']} {sig['engine']}: {reason}")
                     continue
 
-                # Entry-DETE: Queue signal instead of opening immediately
+                # === v4.2.3: Early Depth Gate - Filter out low-liquidity symbols BEFORE LiquidityGuard ===
+                if self.config.min_depth_usd > 0:
+                    try:
+                        symbol = sig['symbol']
+                        liquidity = self.exchange.get_liquidity_metrics(symbol)
+                        depth_usd = liquidity.get('depth_usd', 0)
+
+                        if depth_usd < self.config.min_depth_usd:
+                            add_skip_reason("SKIP_EARLY_DEPTH_GATE")
+                            self.logger.debug(
+                                f"[EARLY_DEPTH_GATE] REJECT {symbol} | "
+                                f"depth=${depth_usd:.0f} < min=${self.config.min_depth_usd:.0f}"
+                            )
+                            continue
+                    except Exception as e:
+                        self.logger.debug(f"[EARLY_DEPTH_GATE] Error for {sig['symbol']}: {e}, proceeding")
+
+                # Entry-DETE: Queue sig instead of opening immediately
                 if self.config.entry_dete_enabled:
-                    self.entry_dete_engine.queue_signal(signal)
+                    self.entry_dete_engine.queue_signal(sig)
                     signals_queued += 1
                     continue  # Skip immediate entry logic below
 
-                # Get current price (use entry_price from signal)
-                entry_price = signal['entry_price']
-                stop_loss = signal['stop_loss']
+                # Get current price (use entry_price from sig)
+                entry_price = sig['entry_price']
+                stop_loss = sig['stop_loss']
+                symbol = sig['symbol']
 
-                # Calculate position size
-                size_usd = self.risk_engine.calculate_position_size(signal, entry_price, stop_loss)
+                # Calculate position size (includes LiquidityGuard scaling)
+                size_usd = self.risk_engine.calculate_position_size(sig, entry_price, stop_loss)
 
-                # Minimum position size (adjusted for account size)
-                min_position_size = max(1.0, self.config.starting_equity * 0.01)  # 1% of equity or $1, whichever is higher
-                if size_usd < min_position_size:
-                    self.logger.debug(f"❌ Position size too small for {signal['symbol']}: ${size_usd:.2f} (min: ${min_position_size:.2f})")
+                # === v4.2.3: Viability Gate 1 - Check if LiquidityGuard rejected (returns 0.0) ===
+                if size_usd <= 0:
+                    add_skip_reason("SKIP_TOO_SMALL_AFTER_LIQUIDITY")
+                    self.logger.debug(f"❌ [{symbol}] LiquidityGuard rejected (size={size_usd})")
                     continue
 
+                # === v4.2.3: Viability Gate 2 - Spread and Depth checks ===
+                try:
+                    liquidity = self.exchange.get_liquidity_metrics(symbol)
+                    spread_pct = liquidity.get('spread_pct', 0.5)
+                    depth_usd = liquidity.get('depth_usd', 10000)
+
+                    # Check spread
+                    if spread_pct > self.config.max_spread_pct_order:
+                        add_skip_reason("SKIP_SPREAD_TOO_HIGH")
+                        self.logger.info(
+                            f"[VIABILITY_CHECK] REJECT {symbol} | reason=SPREAD_TOO_HIGH | "
+                            f"spread={spread_pct:.2f}% > max={self.config.max_spread_pct_order:.2f}%"
+                        )
+                        continue
+
+                    # Check depth
+                    required_depth = size_usd * self.config.min_depth_multiple
+                    if depth_usd < required_depth:
+                        add_skip_reason("SKIP_DEPTH_TOO_LOW")
+                        self.logger.info(
+                            f"[VIABILITY_CHECK] REJECT {symbol} | reason=DEPTH_TOO_LOW | "
+                            f"depth=${depth_usd:.0f} < required=${required_depth:.0f} "
+                            f"(size=${size_usd:.2f} * {self.config.min_depth_multiple}x)"
+                        )
+                        continue
+
+                    # Log viability check success
+                    self.logger.debug(
+                        f"[VIABILITY_CHECK] PASS {symbol} | size=${size_usd:.2f} | "
+                        f"spread={spread_pct:.2f}% | depth=${depth_usd:.0f}"
+                    )
+
+                except Exception as e:
+                    self.logger.warning(f"[VIABILITY_CHECK] Error for {symbol}: {e}, proceeding with caution")
+
+                # === v4.2.3: Exchange Validation ===
+                # Validate against exchange limits (minQty, minNotional, precision)
+                valid, reason_code, details = self.exchange.validate_order(symbol, size_usd, entry_price)
+
+                if not valid:
+                    add_skip_reason(reason_code)
+                    self.logger.info(
+                        f"[ORDER_VALIDATION] REJECT {symbol} | reason={reason_code} | "
+                        f"size=${size_usd:.2f} | price={entry_price:.6f} | "
+                        f"details={details}"
+                    )
+                    continue
+
+                self.logger.debug(f"[ORDER_VALIDATION] PASS {symbol} | {details}")
+
                 # Calculate risk % and quantities
-                risk_pct = self.risk_engine.get_risk_per_trade(signal.get('engine', 'standard'))
+                risk_pct = self.risk_engine.get_risk_per_trade(sig.get('engine', 'standard'))
                 equity_at_entry = self.risk_engine.current_equity
                 initial_risk_usd = equity_at_entry * risk_pct
                 qty = size_usd / entry_price if entry_price > 0 else 0
 
                 # Create position object
                 position = {
-                    'symbol': signal['symbol'],
-                    'side': signal['side'],
-                    'engine': signal['engine'],
+                    'symbol': sig['symbol'],
+                    'side': sig['side'],
+                    'engine': sig['engine'],
                     'entry_price': entry_price,
                     'stop_loss': stop_loss,
-                    'tp_2r': signal.get('tp_2r', 0),
-                    'tp_4r': signal.get('tp_4r', 0),
+                    'tp_2r': sig.get('tp_2r', 0),
+                    'tp_4r': sig.get('tp_4r', 0),
                     'size_usd': size_usd,
                     'qty': qty,
                     'risk_pct': risk_pct,
                     'initial_risk_usd': initial_risk_usd,
                     'equity_at_entry': equity_at_entry,
-                    'score': signal.get('score', 0),
-                    'regime': signal.get('regime', ''),
+                    'score': sig.get('score', 0),
+                    'regime': sig.get('regime', ''),
                     'timestamp_open': time.time(),
-                    'max_hold_hours': signal.get('max_hold_hours', 48)
+                    'max_hold_hours': sig.get('max_hold_hours', 48)
                 }
 
-                # Place order (SIM or LIVE)
-                if self.config.sim_mode:
-                    # Detailed SIM logging
-                    self.logger.info(
-                        f"✅ [SIM-OPEN] {position['symbol']} {position['side']} | "
-                        f"equity=${equity_at_entry:.2f} | "
-                        f"regime={position['regime']} | "
-                        f"risk={risk_pct*100:.3f}% | "
-                        f"risk_usd=${initial_risk_usd:.2f} | "
-                        f"size_usd=${size_usd:.2f} | "
-                        f"qty={qty:.6f} | "
-                        f"entry={entry_price:.6f} | "
-                        f"stop={stop_loss:.6f} | "
-                        f"engine={position['engine']} | "
-                        f"score={position['score']}"
-                    )
+                # === LIVE ORDER with full lifecycle logging ===
 
-                    # Add position
-                    self.risk_engine.add_position(position)
-                    signals_opened += 1
+                # === v4.2.3: Check live test mode limits ===
+                if self.config.live_test_mode:
+                    test_allowed, adjusted_size_usd, test_reason = self._check_live_test_limits(size_usd, symbol)
 
-                    # Send enhanced Telegram notification for SIM open
-                    try:
-                        target = signal.get('tp_4r', signal.get('tp_2r', 0))
-                        r_multiple = None
-                        if stop_loss > 0 and entry_price > 0:
-                            risk_per_unit = abs(entry_price - stop_loss)
-                            if risk_per_unit > 0 and target > 0:
-                                reward_per_unit = abs(target - entry_price)
-                                r_multiple = reward_per_unit / risk_per_unit
-
-                        self.alert_mgr.send_trade_open(
-                            symbol=position['symbol'],
-                            side=position['side'].upper(),
-                            engine=position['engine'].upper(),
-                            regime=position['regime'],
-                            size=qty,
-                            entry=entry_price,
-                            stop=stop_loss,
-                            target=target if target > 0 else None,
-                            leverage=1.0,
-                            risk_pct=risk_pct * 100,
-                            r_multiple=r_multiple
+                    if not test_allowed:
+                        add_skip_reason("LIVE_TEST_LIMIT")
+                        self.logger.info(
+                            f"[LIVE_TEST] REJECT {symbol} | reason={test_reason}"
                         )
-                        self.logger.info(f"[TELEGRAM] Sent enhanced SIM trade open notification for {position['symbol']}")
-                    except Exception as e:
-                        self.logger.warning(f"[TELEGRAM] Failed to send enhanced trade open notification: {e}")
+                        continue
 
-                else:
-                    # LIVE order
-                    # Calculate amount in base currency
-                    amount = size_usd / entry_price
+                    # Use adjusted size
+                    if adjusted_size_usd != size_usd:
+                        size_usd = adjusted_size_usd
+                        position['size_usd'] = size_usd
+                        qty = size_usd / entry_price if entry_price > 0 else 0
+                        position['qty'] = qty
 
+                # Calculate amount in base currency
+                amount = size_usd / entry_price
+
+                # Log order validation start
+                self.logger.info(
+                    f"[ORDER_VALIDATING] {symbol} | side={position['side']} | "
+                    f"size=${size_usd:.2f} | amount={amount:.6f} | price={entry_price:.6f}"
+                )
+
+                try:
+                    # Attempt to create order
                     order = self.exchange.create_order(
                         symbol=position['symbol'],
                         type='market',
@@ -666,21 +765,42 @@ class AlphaSniperBot:
                         params={'leverage': 1}  # 1x isolated
                     )
 
+                    # Check if order succeeded
                     if order and order.get('id'):
+                        # Extract filled details
+                        order_id = order.get('id')
+                        filled_qty = order.get('filled', amount)
+                        avg_price = order.get('average', order.get('price', entry_price))
+                        order_status = order.get('status', 'unknown')
+
+                        # Log order placed
+                        self.logger.info(
+                            f"[ORDER_PLACED] {symbol} | id={order_id} | "
+                            f"side={position['side']} | amount={amount:.6f} | status={order_status}"
+                        )
+
+                        # Log order filled (for market orders, usually immediate)
+                        if order_status in ['closed', 'filled']:
+                            self.logger.info(
+                                f"[ORDER_FILLED] {symbol} | id={order_id} | "
+                                f"filled_qty={filled_qty:.6f} | avg_price={avg_price:.6f}"
+                            )
+
+                        # Success - add position
                         self.logger.info(
                             f"✅ [LIVE] Opened {position['side']} | "
                             f"{position['symbol']} | "
                             f"Size: ${size_usd:.2f} | "
-                            f"Order ID: {order['id']}"
+                            f"Order ID: {order_id}"
                         )
 
-                        position['order_id'] = order['id']
+                        position['order_id'] = order_id
                         self.risk_engine.add_position(position)
                         signals_opened += 1
 
                         # Send enhanced Telegram notification for LIVE open
                         try:
-                            target = signal.get('tp_4r', signal.get('tp_2r', 0))
+                            target = sig.get('tp_4r', sig.get('tp_2r', 0))
                             r_multiple = None
                             if stop_loss > 0 and entry_price > 0:
                                 risk_per_unit = abs(entry_price - stop_loss)
@@ -701,23 +821,53 @@ class AlphaSniperBot:
                                 risk_pct=risk_pct * 100,
                                 r_multiple=r_multiple
                             )
-                            self.logger.info(f"[TELEGRAM] Sent enhanced LIVE trade open notification for {position['symbol']}")
+                            self.logger.info(f"[TELEGRAM] Sent enhanced LIVE trade open notification for {symbol}")
                         except Exception as e:
-                            self.logger.warning(f"[TELEGRAM] Failed to send enhanced LIVE trade open notification: {e}")
+                            self.logger.warning(f"[TELEGRAM] Failed to send LIVE trade open notification: {e}")
+
                     else:
-                        self.logger.error(f"🔴 Failed to create order for {position['symbol']}")
+                        # Order returned None or no ID - exchange rejected
+                        add_skip_reason("EXCHANGE_REJECTED")
+                        self.logger.error(
+                            f"[ORDER_REJECTED] {symbol} | reason=EXCHANGE_REJECTED | "
+                            f"order_response={order}"
+                        )
+
+                except Exception as e:
+                    # Exception during order creation
+                    add_skip_reason("ORDER_EXCEPTION")
+                    error_msg = str(e)
+                    self.logger.error(
+                        f"[ORDER_EXCEPTION] {symbol} | error={error_msg} | "
+                        f"error_type={type(e).__name__}"
+                    )
+
+                    # Try to extract exchange response if available
+                    if hasattr(e, 'response'):
+                        try:
+                            response_payload = getattr(e, 'response', {})
+                            self.logger.error(f"[ORDER_EXCEPTION] Exchange response: {response_payload}")
+                        except Exception:
+                            pass
 
             except Exception as e:
-                self.logger.error(f"Error processing signal {signal.get('symbol', 'UNKNOWN')}: {e}")
+                self.logger.error(f"Error processing sig {sig.get('symbol', 'UNKNOWN')}: {e}")
                 continue
 
-        # Log results
+        # === v4.2.3: Log results with aggregated skip reasons ===
         if signals_queued > 0:
             self.logger.info(f"🎯 Queued {signals_queued} signal(s) for Entry-DETE confirmation")
+
         if signals_opened > 0:
             self.logger.info(f"✅ Opened {signals_opened} new position(s)")
+
         if signals_opened == 0 and signals_queued == 0:
-            self.logger.info("📊 No new positions opened or queued")
+            if skip_reasons:
+                # Format skip reasons for logging
+                reasons_str = " | ".join([f"{k}={v}" for k, v in sorted(skip_reasons.items(), key=lambda x: -x[1])])
+                self.logger.info(f"📊 No new positions opened | skip_reasons: {reasons_str}")
+            else:
+                self.logger.info("📊 No new positions opened or queued (no signals processed)")
 
     def _log_cycle_summary(self):
         """
@@ -795,9 +945,8 @@ class AlphaSniperBot:
 
                         # Send Telegram notification
                         try:
-                            mode = "SIM" if self.config.sim_mode else "LIVE"
                             self.telegram.send(
-                                f"⚡ <b>[{mode}] FAST MODE DISABLED</b>\n"
+                                f"⚡ <b>[LIVE] FAST MODE DISABLED</b>\n"
                                 f"━━━━━━━━━━━━━━━━━━\n"
                                 f"<b>Runtime:</b> {fast_mode_runtime_hours:.1f}h\n"
                                 f"<b>Max allowed:</b> {self.config.fast_mode_max_runtime_hours}h\n"
@@ -893,7 +1042,6 @@ class AlphaSniperBot:
                     if elapsed_since_scan > max_stall_seconds:
                         # Send alert only once per stall event
                         if not self.drift_alert_sent:
-                            mode = "SIM" if self.config.sim_mode else "LIVE"
                             self.logger.error(
                                 f"🚨 DRIFT DETECTED: Scan loop stalled! "
                                 f"Last scan: {elapsed_since_scan:.0f}s ago (max: {max_stall_seconds:.0f}s)"
@@ -942,17 +1090,16 @@ class AlphaSniperBot:
 
             # Send fatal error alert to Telegram
             try:
-                mode = "SIM" if self.config.sim_mode else "LIVE"
                 error_type = type(e).__name__
                 error_msg = str(e)[:200]  # Limit to 200 chars
-                self.logger.info(f"[TELEGRAM] Sending fatal error notification")
+                self.logger.info("[TELEGRAM] Sending fatal error notification")
                 self.telegram.send(
-                    f"🚨 [{mode}] FATAL ERROR\n"
+                    f"🚨 [LIVE] FATAL ERROR\n"
                     f"Type: {error_type}\n"
                     f"Message: {error_msg}\n"
                     f"BOT IS SHUTTING DOWN"
                 )
-            except:
+            except Exception:
                 pass  # Don't crash on Telegram failure
 
             self.shutdown()
@@ -999,11 +1146,10 @@ class AlphaSniperBot:
             self.logger.error(f"Error saving positions during shutdown: {e}")
 
         # Send shutdown notification
-        if not self.config.sim_mode:
-            try:
-                self.telegram.send("🛑 Alpha Sniper V4.2 stopped", description="Shutdown")
-            except Exception as e:
-                self.logger.error(f"Error sending Telegram shutdown message: {e}")
+        try:
+            self.telegram.send("🛑 Alpha Sniper V4.2 stopped", description="Shutdown")
+        except Exception as e:
+            self.logger.error(f"Error sending Telegram shutdown message: {e}")
 
         self.logger.info("👋 Goodbye!")
 

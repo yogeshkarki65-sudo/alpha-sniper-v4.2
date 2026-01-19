@@ -12,10 +12,10 @@ Runs once per day at 00:05 UTC to adjust:
 All adjustments are clamped to safe ranges and logged.
 """
 
-import os
 import csv
+import os
 from datetime import datetime, timedelta
-from typing import Optional, Tuple, Dict
+from typing import Dict, Optional
 
 
 class DynamicFilterEngine:
@@ -64,20 +64,20 @@ class DynamicFilterEngine:
 
         # 2. Calculate performance metrics
         metrics = self._calculate_metrics(trades, now_utc)
-        self.logger.info(f"DFE | Performance metrics:")
+        self.logger.info("DFE | Performance metrics:")
         self.logger.info(f"  Trades/day (14d): {metrics['trades_per_day_14d']:.2f}")
         self.logger.info(f"  Win rate (last 30): {metrics['win_rate_30']*100:.1f}%")
         self.logger.info(f"  Avg R (last 30): {metrics['avg_R_30']:.3f}R")
 
         # 3. Load current filter values
         current_filters = self._load_current_filters()
-        self.logger.info(f"DFE | Current filters:")
+        self.logger.info("DFE | Current filters:")
         for key, val in current_filters.items():
             self.logger.info(f"  {key} = {val}")
 
         # 4. Calculate new filter values
         new_filters = self._calculate_new_filters(current_filters, metrics)
-        self.logger.info(f"DFE | New filters:")
+        self.logger.info("DFE | New filters:")
         for key, val in new_filters.items():
             delta = val - current_filters[key]
             direction = "↑" if delta > 0 else "↓" if delta < 0 else "→"
@@ -123,10 +123,10 @@ class DynamicFilterEngine:
                 # Try parsing different formats
                 try:
                     ts = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
-                except:
+                except Exception:
                     try:
                         ts = datetime.strptime(ts_str, '%Y-%m-%d %H:%M:%S')
-                    except:
+                    except Exception:
                         continue
 
                 parsed_trades.append({
@@ -134,7 +134,7 @@ class DynamicFilterEngine:
                     'R': float(trade.get('r_multiple', trade.get('R', 0))),
                     'pnl': float(trade.get('pnl_usd', 0))
                 })
-            except Exception as e:
+            except Exception:
                 continue
 
         if not parsed_trades:
@@ -188,7 +188,7 @@ class DynamicFilterEngine:
                         if key in self.FILTER_RANGES:
                             try:
                                 filters[key] = float(value.strip())
-                            except:
+                            except Exception:
                                 pass
 
             # Fill in any missing filters with defaults
@@ -235,7 +235,7 @@ class DynamicFilterEngine:
         win_rate = metrics['win_rate_30']
         avg_R = metrics['avg_R_30']
 
-        self.logger.info(f"DFE | Applying adjustment rules:")
+        self.logger.info("DFE | Applying adjustment rules:")
 
         # Rule 1: Trade frequency adjustment
         if trades_per_day < 3:

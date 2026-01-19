@@ -16,14 +16,100 @@ python main.py
 
 See `alpha-sniper/README.md` for detailed documentation.
 
+## Development & Diagnostics
+
+Install development dependencies for running diagnostic scripts:
+
+```bash
+pip install -r requirements-dev.txt
+```
+
+### Diagnostic Scripts
+
+**Health Check:**
+```bash
+python scripts/diagnostics.py | tee /tmp/alpha_diag.json
+```
+
+**Settings Dump:**
+```bash
+python scripts/print_settings.py | tee /tmp/alpha_settings.json
+```
+
+**Why No Trade Analysis:**
+```bash
+python scripts/why_no_trade.py | tee /tmp/alpha_why_no_trade.json
+```
+
+### Recommended ENV for Pump Catching (Safe Defaults)
+
+```env
+# React faster
+ALPHA_SCAN_INTERVAL_SECONDS=60
+
+# Avoid dead/pegged pairs and thin books
+ALPHA_UNIVERSE_MIN_QUOTE_VOLUME=100000
+ALPHA_UNIVERSE_EXCLUDE_BASES=USDC,FDUSD,DAI,TUSD,USDD,EUR,PAXG,WBTC,BTCB
+ALPHA_UNIVERSE_EXCLUDE_SYMBOL_PATTERNS=^USDC/USDT$,^PAXG/USDT$
+
+# Early detector (start moderate; tune after audit)
+ALPHA_EARLY_RET_5M_MIN=0.015
+ALPHA_EARLY_VOL_SPIKE_MIN=1.5
+ALPHA_EARLY_ACCEL_REQUIRED=true
+
+# Anti-wick
+ALPHA_WICK_FILTER_ENABLE=true
+ALPHA_WICK_FILTER_ATR_MULT=1.5
+
+# Liquidity floor (raise as order cap grows)
+ALPHA_MIN_DEPTH_USD_ABSOLUTE=15000
+```
+
+### Monitoring Commands
+
+After editing `.env`, restart and tail important lines:
+
+```bash
+sudo systemctl restart alpha-sniper-async.service
+journalctl -u alpha-sniper-async.service -n 120 --no-pager | grep -E "EARLY signal|Opened|Closed|AUDIT|IOC|slip"
+```
+
 ## Features
 
 - ✅ SIM and LIVE modes
 - ✅ Regime-based position sizing (BULL, SIDEWAYS, MILD_BEAR, DEEP_BEAR)
 - ✅ Multiple signal engines (long, short, pump, bear_micro)
+- ✅ **AutoTune Pro** - Self-adjusting thresholds (no more 0-trade days!)
+- ✅ Runtime overrides (change settings without restart)
+- ✅ Sizing autopilot (adaptive risk management)
 - ✅ Comprehensive risk management
-- ✅ Telegram alerts
+- ✅ Telegram alerts with autotune metrics
 - ✅ Safe error handling
+
+### 🤖 AutoTune Pro (NEW!)
+
+The bot now automatically adjusts signal thresholds to maintain healthy signal flow:
+
+- **Threshold Tuning**: Adjusts RET5M, VSpike, and Score to target 1-8 signals/hour
+- **Sizing Autopilot**: Scales RISK_PER_TRADE based on performance (avgR, winrate)
+- **Live Flip**: Auto-disables LIVE_TEST_MODE after 20+ profitable trades
+- **Runtime Overrides**: Change settings on-the-fly via CLI or JSON
+
+**Why This Matters**: Eliminates 2-day periods with 0 trades by automatically lowering thresholds when market volatility is low, and raising them when too many signals trigger.
+
+**CLI Usage**:
+```bash
+# View current overrides
+python scripts/overrides_cli.py show
+
+# Manually adjust threshold
+python scripts/overrides_cli.py set --key MIN_SCORE --value 10
+
+# Reset to defaults
+python scripts/overrides_cli.py reset
+```
+
+**See**: `DEPLOY_AUTOTUNE.md` for deployment instructions
 
 ## Git Commands
 

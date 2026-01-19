@@ -15,7 +15,7 @@ Usage:
     alert_mgr.send_trade_close(...)
 """
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any
+from typing import Optional
 
 
 class TelegramAlertManager:
@@ -67,7 +67,7 @@ class TelegramAlertManager:
         )
 
         if mode == 'LIVE':
-            msg += f"\n💰 <i>Equity will sync from MEXC shortly</i>"
+            msg += "\n💰 <i>Equity will sync from MEXC shortly</i>"
 
         self.telegram.send(msg, description="Startup")
 

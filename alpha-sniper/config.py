@@ -1,7 +1,7 @@
 import os
 import re
 from dataclasses import dataclass
-from typing import Optional
+
 from dotenv import load_dotenv
 
 
@@ -33,8 +33,6 @@ class Config:
                 value = value.strip()
             return value
 
-        self.sim_mode = self.parse_bool(get_env("SIM_MODE", "true"))
-        self.sim_data_source = get_env("SIM_DATA_SOURCE", "FAKE").upper()
         self.mexc_api_key = get_env("MEXC_API_KEY", "")
         self.mexc_secret_key = get_env("MEXC_SECRET_KEY", "")
         self.mexc_spot_enabled = self.parse_bool(get_env("MEXC_SPOT_ENABLED", "true"))
@@ -89,6 +87,37 @@ class Config:
         self.liquidity_spread_soft_limit = float(get_env("LIQUIDITY_SPREAD_SOFT_LIMIT", "0.7"))
         self.liquidity_depth_good_level = float(get_env("LIQUIDITY_DEPTH_GOOD_LEVEL", "20000"))
         self.liquidity_min_factor = float(get_env("LIQUIDITY_MIN_FACTOR", "0.25"))
+
+        # === LIQUIDITY REJECTION THRESHOLDS (v4.2.2) ===
+        self.min_liq_factor = float(get_env("MIN_LIQ_FACTOR", "0.4"))  # Reject if factor < this
+        self.min_adjusted_usd = float(get_env("MIN_ADJUSTED_USD", "5.0"))  # Reject if adjusted size < this
+
+        # === FRESH IMPULSE PUMP DETECTION (v4.2.2) ===
+        self.pump_spike_mult = float(get_env("PUMP_SPIKE_MULT", "2.0"))  # Current 15m volume must be >= 2x previous 15m
+        self.pump_spike_lookback = int(get_env("PUMP_SPIKE_LOOKBACK", "1"))  # Number of candles to compare
+        self.pump_max_24h_extended = float(get_env("PUMP_MAX_24H_EXTENDED", "12.0"))  # Reject if already pumped > this %
+
+        # === ORDER VIABILITY & EXCHANGE VALIDATION (v4.2.3) ===
+        self.min_viable_trade_usd = float(get_env("MIN_VIABLE_TRADE_USD", "5.0"))  # Base minimum trade size (lowered from 10.0)
+        self.max_spread_pct_order = float(get_env("MAX_SPREAD_PCT_ORDER", "0.30"))  # Reject if spread > this %
+        self.min_depth_multiple = float(get_env("MIN_DEPTH_MULTIPLE", "200"))  # depth_usd must be >= adjusted_usd * this
+        self.min_depth_usd = float(get_env("MIN_DEPTH_USD", "0"))  # Minimum absolute depth (0 = disabled, use multiple only)
+        self.orderbook_depth_levels = int(get_env("ORDERBOOK_DEPTH_LEVELS", "10"))  # Number of orderbook levels to analyze
+        self.validation_fee_buffer_pct = float(get_env("VALIDATION_FEE_BUFFER_PCT", "0.50"))  # Extra buffer for fees/slippage (50%)
+        self.validation_qty_buffer_pct = float(get_env("VALIDATION_QTY_BUFFER_PCT", "2.0"))  # Buffer for min_qty calculation (2%)
+        self.exchange_taker_fee_fallback = float(get_env("EXCHANGE_TAKER_FEE_FALLBACK", "0.001"))  # 0.1% fallback fee if not available
+
+        # === PRODUCTION SMOKE TESTS (v4.2.3) ===
+        self.real_market_smoke_test = self.parse_bool(get_env("REAL_MARKET_SMOKE_TEST", "false"))  # Enable smoke tests
+        self.smoke_test_allow_orders = self.parse_bool(get_env("SMOKE_TEST_ALLOW_ORDERS", "false"))  # Allow real orders in smoke test
+        self.smoke_test_symbol = get_env("SMOKE_TEST_SYMBOL", "BTC/USDT")  # Symbol for smoke tests
+        self.smoke_test_usd = float(get_env("SMOKE_TEST_USD", "10.0"))  # USD size for smoke test orders
+
+        # === LIVE TEST MODE (v4.2.3) ===
+        self.live_test_mode = self.parse_bool(get_env("LIVE_TEST_MODE", "false"))  # Enable safe live testing with real orders
+        self.max_live_test_orders_per_day = int(get_env("MAX_LIVE_TEST_ORDERS_PER_DAY", "1"))  # Max orders per 24h in live test mode
+        self.max_live_test_usd_per_order = float(get_env("MAX_LIVE_TEST_USD_PER_ORDER", "7.5"))  # Max USD per order in live test mode
+        self.live_test_cancel_timeout_seconds = int(get_env("LIVE_TEST_CANCEL_TIMEOUT_SECONDS", "10"))  # Cancel if not filled within this time
 
         # UPGRADE E: Correlation-Aware Portfolio Heat
         self.correlation_limit_enabled = self.parse_bool(get_env("CORRELATION_LIMIT_ENABLED", "true"))
@@ -169,9 +198,9 @@ class Config:
         self.drift_detection_enabled = self.parse_bool(get_env("DRIFT_DETECTION_ENABLED", "true"))
         self.drift_max_stall_multiplier = int(get_env("DRIFT_MAX_STALL_MULTIPLIER", "3"))  # max(3 * scan_interval, 600s)
 
-        if not self.sim_mode:
-            if not self.mexc_api_key or not self.mexc_secret_key:
-                raise Exception("Live mode requires MEXC_API_KEY and MEXC_SECRET_KEY in the environment")
+        # Always LIVE mode - validate API keys
+        if not self.mexc_api_key or not self.mexc_secret_key:
+            raise Exception("MEXC_API_KEY and MEXC_SECRET_KEY are required in .env")
 
         # Store get_env for use in instance methods
         self._get_env = get_env
@@ -279,7 +308,7 @@ class Config:
             if regime_value is not None and regime_value != '':
                 try:
                     return type(default_value)(regime_value)
-                except:
+                except Exception:
                     pass
 
             # Try base env var
@@ -288,7 +317,7 @@ class Config:
             if base_value is not None and base_value != '':
                 try:
                     return type(default_value)(base_value)
-                except:
+                except Exception:
                     pass
 
             # Use default

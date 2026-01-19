@@ -8,13 +8,12 @@ Provides:
 """
 import json
 import os
-import time
 import threading
+import time
 from datetime import datetime
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Optional
-
 
 # Global bot reference for health checks
 _bot_instance: Optional[object] = None
@@ -168,14 +167,35 @@ def start_heartbeat_updater(bot_instance, interval: int = 30):
                 if hasattr(bot_instance, 'last_scan_time') and bot_instance.last_scan_time:
                     last_scan_time = datetime.fromtimestamp(bot_instance.last_scan_time).isoformat()
 
+                # Calculate session start equity
+                session_start = (
+                    float(risk_engine.session_start_equity)
+                    if risk_engine and risk_engine.session_start_equity
+                    else float(risk_engine.current_equity) if risk_engine else 0.0
+                )
+
+                # Calculate session PnL percentage
+                if (
+                    risk_engine
+                    and risk_engine.session_start_equity
+                    and risk_engine.session_start_equity > 0
+                ):
+                    session_pnl = (
+                        (risk_engine.current_equity - risk_engine.session_start_equity)
+                        / risk_engine.session_start_equity
+                        * 100
+                    )
+                else:
+                    session_pnl = 0.0
+
                 heartbeat_data = {
                     "timestamp": datetime.utcnow().isoformat(),
                     "status": "running" if is_running else "stopped",
                     "pid": os.getpid(),
                     "open_positions": len(risk_engine.open_positions) if risk_engine else 0,
                     "equity": float(risk_engine.current_equity) if risk_engine else 0.0,
-                    "session_start_equity": float(risk_engine.session_start_equity) if risk_engine and risk_engine.session_start_equity else float(risk_engine.current_equity) if risk_engine else 0.0,
-                    "session_pnl_pct": float(((risk_engine.current_equity - risk_engine.session_start_equity) / risk_engine.session_start_equity * 100) if risk_engine and risk_engine.session_start_equity and risk_engine.session_start_equity > 0 else 0.0),
+                    "session_start_equity": session_start,
+                    "session_pnl_pct": float(session_pnl),
                     "signals_today": int(risk_engine.signals_today) if risk_engine and hasattr(risk_engine, 'signals_today') else 0,
                     "pumps_today": int(risk_engine.pumps_today) if risk_engine and hasattr(risk_engine, 'pumps_today') else 0,
                     "last_scan_time": last_scan_time
@@ -234,7 +254,7 @@ def check_health_from_cli() -> int:
         timestamp = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
         age_seconds = (datetime.utcnow() - timestamp.replace(tzinfo=None)).total_seconds()
 
-        print(f"📊 Alpha Sniper Health Status")
+        print("📊 Alpha Sniper Health Status")
         print(f"   Status: {status}")
         print(f"   PID: {pid}")
         print(f"   Last heartbeat: {age_seconds:.0f}s ago")

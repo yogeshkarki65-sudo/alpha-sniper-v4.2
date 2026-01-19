@@ -44,7 +44,7 @@ class ShortEngine:
         Evaluate a single symbol for short entry
         """
         # Get data
-        ticker = data.get('ticker')
+        data.get('ticker')
         df_15m = data.get('df_15m')
         df_1h = data.get('df_1h')
         funding_rate = data.get('funding_rate', 0)

@@ -7,12 +7,11 @@ IMPROVEMENTS:
 - Clean BaseExchange interface
 - Robust error handling with exponential backoff
 """
-import ccxt
-import time
-import logging
 import random
-import numpy as np
-from datetime import datetime, timedelta
+import time
+from datetime import datetime
+
+import ccxt
 
 
 class BaseExchange:
@@ -78,6 +77,28 @@ class SimulatedExchange(BaseExchange):
         # Initialize current prices (seeded from symbol hash for consistency)
         self.current_prices = {}  # {symbol: price}
         self._initialize_prices()
+
+        # === v4.2.3: Exchange market limits cache (stub for sim mode) ===
+        self.markets_cache = self.fake_markets
+        self.markets_cache_timestamp = time.time()
+
+    def validate_order(self, symbol: str, usd_size: float, price: float) -> tuple[bool, str, dict]:
+        """
+        Stub validation for simulated exchange (always passes with minimal checks)
+        """
+        details = {
+            'symbol': symbol,
+            'usd_size': usd_size,
+            'price': price,
+            'mode': 'SIMULATED',
+            'min_trade_usd': self.config.min_viable_trade_usd
+        }
+
+        # Only check minimum viable size
+        if usd_size < self.config.min_viable_trade_usd:
+            return False, "SKIP_TOO_SMALL_AFTER_VALIDATION", details
+
+        return True, "OK", details
 
     def _generate_fake_markets(self):
         """Generate fake market data for simulation"""
@@ -225,11 +246,11 @@ class SimulatedExchange(BaseExchange):
 
             o = price
             h = price * random.uniform(1.001, 1.008)  # Smaller intrabar moves
-            l = price * random.uniform(0.992, 0.999)
+            low = price * random.uniform(0.992, 0.999)
             c = price * random.uniform(0.998, 1.002)  # Close near open
             v = random.uniform(2000, 8000)
 
-            ohlcv.append([ts, o, h, l, c, v])
+            ohlcv.append([ts, o, h, low, c, v])
 
         # Ensure the last candle close matches current price
         if ohlcv:
@@ -283,7 +304,7 @@ class SimulatedExchange(BaseExchange):
 
             o = price
             h = price * random.uniform(1.002, 1.015)
-            l = price * random.uniform(0.985, 0.998)
+            low = price * random.uniform(0.985, 0.998)
             c = price * random.uniform(0.995, 1.005)
 
             # Volume increases with recency
@@ -296,7 +317,7 @@ class SimulatedExchange(BaseExchange):
             else:
                 v = base_vol
 
-            ohlcv.append([ts, o, h, l, c, v])
+            ohlcv.append([ts, o, h, low, c, v])
 
         # Ensure the last candle close matches current price
         if ohlcv:
@@ -434,6 +455,144 @@ class RealExchange(BaseExchange):
         })
 
         self.logger.info("🌐 RealExchange initialized (LIVE mode with MEXC)")
+
+        # === v4.2.3: Exchange market limits cache ===
+        self.markets_cache = None
+        self.markets_cache_timestamp = 0
+        self.markets_cache_lifetime = 3600  # Refresh every hour
+
+    def _ensure_markets_loaded(self):
+        """
+        Load markets and cache them (refresh every hour)
+        Returns: dict of markets or None on failure
+        """
+        now = time.time()
+        if self.markets_cache and (now - self.markets_cache_timestamp) < self.markets_cache_lifetime:
+            return self.markets_cache
+
+        try:
+            self.logger.debug("[Validation] Loading markets from exchange...")
+            markets = self.get_markets()
+            if markets:
+                self.markets_cache = markets
+                self.markets_cache_timestamp = now
+                self.logger.info(f"[Validation] Loaded {len(markets)} markets from exchange")
+                return markets
+        except Exception as e:
+            self.logger.error(f"[Validation] Failed to load markets: {e}")
+
+        return None
+
+    def validate_order(self, symbol: str, usd_size: float, price: float) -> tuple[bool, str, dict]:
+        """
+        Validate order against exchange limits (minQty, minNotional, precision)
+
+        Args:
+            symbol: Trading pair (e.g., "BTC/USDT")
+            usd_size: Position size in USD
+            price: Current price
+
+        Returns:
+            (ok: bool, reason: str, details: dict)
+            - ok: True if order is valid
+            - reason: Skip reason code if invalid (e.g., "SKIP_MIN_NOTIONAL")
+            - details: Dict with validation details for logging
+        """
+        try:
+            # Load markets
+            markets = self._ensure_markets_loaded()
+            if not markets:
+                return False, "EXCHANGE_MARKETS_UNAVAILABLE", {"error": "Failed to load markets"}
+
+            # Get market info
+            market = markets.get(symbol)
+            if not market:
+                return False, "SYMBOL_NOT_FOUND", {"symbol": symbol, "error": "Symbol not in markets"}
+
+            # Extract limits
+            limits = market.get('limits', {})
+            amount_limits = limits.get('amount', {})
+            cost_limits = limits.get('cost', {})
+            precision = market.get('precision', {})
+
+            min_qty = amount_limits.get('min', 0)
+            min_notional = cost_limits.get('min', 0)
+            amount_precision = precision.get('amount', 8)
+            price_precision = precision.get('price', 8)
+
+            # Get taker fee (fallback to config default)
+            taker_fee = market.get('taker', self.config.exchange_taker_fee_fallback)
+
+            # Calculate quantity
+            qty = usd_size / price if price > 0 else 0
+
+            # Round quantity to exchange precision
+            try:
+                qty_rounded = self.client.amount_to_precision(symbol, qty)
+                qty_rounded = float(qty_rounded)
+            except Exception as e:
+                self.logger.debug(f"[Validation] amount_to_precision failed for {symbol}, using manual rounding: {e}")
+                qty_rounded = round(qty, amount_precision)
+
+            # Calculate notional (cost)
+            notional = qty_rounded * price
+
+            # Calculate dynamic per-symbol minimum trade size
+            # Formula: max(MIN_VIABLE_TRADE_USD, min_notional*(1+fee_buffer), min_qty*price*(1+qty_buffer))
+            min_trade_components = [self.config.min_viable_trade_usd]
+
+            if min_notional > 0:
+                # Add fee buffer to min_notional (includes 2x taker fee + extra buffer)
+                min_from_notional = min_notional * (1 + 2 * taker_fee + self.config.validation_fee_buffer_pct / 100)
+                min_trade_components.append(min_from_notional)
+
+            if min_qty > 0 and price > 0:
+                # Add qty buffer to min_qty requirement
+                min_from_qty = min_qty * price * (1 + self.config.validation_qty_buffer_pct / 100)
+                min_trade_components.append(min_from_qty)
+
+            min_trade_usd = max(min_trade_components)
+
+            # Validation checks
+            details = {
+                'symbol': symbol,
+                'usd_size': usd_size,
+                'price': price,
+                'qty': qty,
+                'qty_rounded': qty_rounded,
+                'notional': notional,
+                'min_qty': min_qty,
+                'min_notional': min_notional,
+                'min_trade_usd': min_trade_usd,
+                'taker_fee': taker_fee,
+                'amount_precision': amount_precision,
+                'price_precision': price_precision
+            }
+
+            # Check 1: Minimum quantity
+            if min_qty > 0 and qty_rounded < min_qty:
+                return False, "SKIP_MIN_QTY", details
+
+            # Check 2: Minimum notional
+            if min_notional > 0 and notional < min_notional:
+                return False, "SKIP_MIN_NOTIONAL", details
+
+            # Check 3: Rounding loss (too much precision loss)
+            rounding_loss_pct = abs(1 - (qty_rounded * price) / usd_size) if usd_size > 0 else 0
+            if rounding_loss_pct > 0.05:  # >5% loss due to rounding
+                details['rounding_loss_pct'] = rounding_loss_pct
+                return False, "SKIP_PRECISION_ROUNDING", details
+
+            # Check 4: Viability after all checks
+            if notional < min_trade_usd:
+                return False, "SKIP_TOO_SMALL_AFTER_VALIDATION", details
+
+            # All checks passed
+            return True, "OK", details
+
+        except Exception as e:
+            self.logger.error(f"[Validation] Exception validating order for {symbol}: {e}")
+            return False, "VALIDATION_EXCEPTION", {"error": str(e), "symbol": symbol}
 
     def _with_retries(self, func, label: str, max_attempts: int = 2, delay_sec: float = 1.0):
         """
@@ -575,6 +734,9 @@ class RealExchange(BaseExchange):
 
     def create_order(self, symbol, type, side, amount, price=None, params=None):
         """Create real order on MEXC"""
+        # Fix: ccxt expects params to be a dict, not None
+        if params is None:
+            params = {}
         return self._with_retries(
             lambda: self.client.create_order(symbol, type, side, amount, price, params),
             f"create_order {symbol}"
@@ -638,9 +800,17 @@ class RealExchange(BaseExchange):
 
             # Log breakdown
             if asset_values:
-                self.logger.info(f"Portfolio breakdown: USDT=${usdt_free + usdt_used:.2f} | {' | '.join(asset_values)} | Total=${total_value_usdt:.2f}")
+                breakdown_msg = (
+                    f"Portfolio breakdown: USDT=${usdt_free + usdt_used:.2f} | "
+                    f"{' | '.join(asset_values)} | Total=${total_value_usdt:.2f}"
+                )
+                self.logger.info(breakdown_msg)
             else:
-                self.logger.debug(f"MEXC Portfolio: USDT=${usdt_free + usdt_used:.2f} (100%) | Total=${total_value_usdt:.2f}")
+                portfolio_msg = (
+                    f"MEXC Portfolio: USDT=${usdt_free + usdt_used:.2f} (100%) | "
+                    f"Total=${total_value_usdt:.2f}"
+                )
+                self.logger.debug(portfolio_msg)
 
             return total_value_usdt
 
@@ -671,6 +841,144 @@ class DataOnlyMexcExchange(BaseExchange):
         })
 
         self.logger.info("🌐 DataOnlyMexcExchange initialized (REAL MEXC data, PAPER trading only)")
+
+        # === v4.2.3: Exchange market limits cache ===
+        self.markets_cache = None
+        self.markets_cache_timestamp = 0
+        self.markets_cache_lifetime = 3600  # Refresh every hour
+
+    def _ensure_markets_loaded(self):
+        """
+        Load markets and cache them (refresh every hour)
+        Returns: dict of markets or None on failure
+        """
+        now = time.time()
+        if self.markets_cache and (now - self.markets_cache_timestamp) < self.markets_cache_lifetime:
+            return self.markets_cache
+
+        try:
+            self.logger.debug("[Validation] Loading markets from exchange...")
+            markets = self.get_markets()
+            if markets:
+                self.markets_cache = markets
+                self.markets_cache_timestamp = now
+                self.logger.info(f"[Validation] Loaded {len(markets)} markets from exchange")
+                return markets
+        except Exception as e:
+            self.logger.error(f"[Validation] Failed to load markets: {e}")
+
+        return None
+
+    def validate_order(self, symbol: str, usd_size: float, price: float) -> tuple[bool, str, dict]:
+        """
+        Validate order against exchange limits (minQty, minNotional, precision)
+
+        Args:
+            symbol: Trading pair (e.g., "BTC/USDT")
+            usd_size: Position size in USD
+            price: Current price
+
+        Returns:
+            (ok: bool, reason: str, details: dict)
+            - ok: True if order is valid
+            - reason: Skip reason code if invalid (e.g., "SKIP_MIN_NOTIONAL")
+            - details: Dict with validation details for logging
+        """
+        try:
+            # Load markets
+            markets = self._ensure_markets_loaded()
+            if not markets:
+                return False, "EXCHANGE_MARKETS_UNAVAILABLE", {"error": "Failed to load markets"}
+
+            # Get market info
+            market = markets.get(symbol)
+            if not market:
+                return False, "SYMBOL_NOT_FOUND", {"symbol": symbol, "error": "Symbol not in markets"}
+
+            # Extract limits
+            limits = market.get('limits', {})
+            amount_limits = limits.get('amount', {})
+            cost_limits = limits.get('cost', {})
+            precision = market.get('precision', {})
+
+            min_qty = amount_limits.get('min', 0)
+            min_notional = cost_limits.get('min', 0)
+            amount_precision = precision.get('amount', 8)
+            price_precision = precision.get('price', 8)
+
+            # Get taker fee (fallback to config default)
+            taker_fee = market.get('taker', self.config.exchange_taker_fee_fallback)
+
+            # Calculate quantity
+            qty = usd_size / price if price > 0 else 0
+
+            # Round quantity to exchange precision
+            try:
+                qty_rounded = self.client.amount_to_precision(symbol, qty)
+                qty_rounded = float(qty_rounded)
+            except Exception as e:
+                self.logger.debug(f"[Validation] amount_to_precision failed for {symbol}, using manual rounding: {e}")
+                qty_rounded = round(qty, amount_precision)
+
+            # Calculate notional (cost)
+            notional = qty_rounded * price
+
+            # Calculate dynamic per-symbol minimum trade size
+            # Formula: max(MIN_VIABLE_TRADE_USD, min_notional*(1+fee_buffer), min_qty*price*(1+qty_buffer))
+            min_trade_components = [self.config.min_viable_trade_usd]
+
+            if min_notional > 0:
+                # Add fee buffer to min_notional (includes 2x taker fee + extra buffer)
+                min_from_notional = min_notional * (1 + 2 * taker_fee + self.config.validation_fee_buffer_pct / 100)
+                min_trade_components.append(min_from_notional)
+
+            if min_qty > 0 and price > 0:
+                # Add qty buffer to min_qty requirement
+                min_from_qty = min_qty * price * (1 + self.config.validation_qty_buffer_pct / 100)
+                min_trade_components.append(min_from_qty)
+
+            min_trade_usd = max(min_trade_components)
+
+            # Validation checks
+            details = {
+                'symbol': symbol,
+                'usd_size': usd_size,
+                'price': price,
+                'qty': qty,
+                'qty_rounded': qty_rounded,
+                'notional': notional,
+                'min_qty': min_qty,
+                'min_notional': min_notional,
+                'min_trade_usd': min_trade_usd,
+                'taker_fee': taker_fee,
+                'amount_precision': amount_precision,
+                'price_precision': price_precision
+            }
+
+            # Check 1: Minimum quantity
+            if min_qty > 0 and qty_rounded < min_qty:
+                return False, "SKIP_MIN_QTY", details
+
+            # Check 2: Minimum notional
+            if min_notional > 0 and notional < min_notional:
+                return False, "SKIP_MIN_NOTIONAL", details
+
+            # Check 3: Rounding loss (too much precision loss)
+            rounding_loss_pct = abs(1 - (qty_rounded * price) / usd_size) if usd_size > 0 else 0
+            if rounding_loss_pct > 0.05:  # >5% loss due to rounding
+                details['rounding_loss_pct'] = rounding_loss_pct
+                return False, "SKIP_PRECISION_ROUNDING", details
+
+            # Check 4: Viability after all checks
+            if notional < min_trade_usd:
+                return False, "SKIP_TOO_SMALL_AFTER_VALIDATION", details
+
+            # All checks passed
+            return True, "OK", details
+
+        except Exception as e:
+            self.logger.error(f"[Validation] Exception validating order for {symbol}: {e}")
+            return False, "VALIDATION_EXCEPTION", {"error": str(e), "symbol": symbol}
 
     def _with_retries(self, func, label: str, max_attempts: int = 2, delay_sec: float = 1.0):
         """
@@ -888,15 +1196,7 @@ class DataOnlyMexcExchange(BaseExchange):
 
 def create_exchange(config, logger):
     """
-    Factory to create appropriate exchange based on SIM_MODE and SIM_DATA_SOURCE
+    Factory to create RealExchange for LIVE trading only.
     """
-    if config.sim_mode:
-        if config.sim_data_source == "LIVE_DATA":
-            logger.info(f"📡 SIM_MODE=True | SIM_DATA_SOURCE=LIVE_DATA | Using DataOnlyMexcExchange (REAL MEXC market data, PAPER ONLY)")
-            return DataOnlyMexcExchange(config, logger)
-        else:
-            logger.info(f"📡 SIM_MODE=True | SIM_DATA_SOURCE=FAKE | Using SimulatedExchange (synthetic data)")
-            return SimulatedExchange(config, logger)
-    else:
-        logger.info(f"📡 SIM_MODE=False | Using RealExchange (LIVE trading)")
-        return RealExchange(config, logger)
+    logger.info("📡 LIVE MODE | Using RealExchange (LIVE trading with real money)")
+    return RealExchange(config, logger)

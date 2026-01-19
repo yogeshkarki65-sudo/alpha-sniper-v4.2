@@ -5,9 +5,12 @@ Risk Engine for Alpha Sniper V4.2
 - Portfolio heat tracking
 - Daily loss limit
 """
+import os
+import sqlite3
 import time
 from datetime import datetime, timezone
-from typing import Optional, Dict, List
+from typing import Dict, Optional
+
 from utils import helpers
 
 
@@ -121,7 +124,114 @@ class RiskEngine:
         # Daily loss limit flag
         self.daily_loss_limit_hit = False
 
+        # Database connection for trade persistence
+        self.db_path = os.getenv('DB_PATH', '/var/lib/alpha-sniper/alpha_sniper.db')
+        self._init_database()
+
         self.logger.info(f"💰 RiskEngine initialized | Starting equity: ${self.starting_equity:.2f}")
+
+    def _init_database(self):
+        """Initialize SQLite database for trade persistence"""
+        try:
+            # Ensure directory exists
+            os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+
+            # Create database and tables if they don't exist
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+
+            # Create trades table (matches existing schema)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS trades (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp_open REAL NOT NULL,
+                    timestamp_close REAL,
+                    symbol TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    engine TEXT NOT NULL,
+                    regime TEXT,
+                    ddl_mode TEXT,
+
+                    entry_price REAL NOT NULL,
+                    exit_price REAL,
+                    stop_loss REAL,
+                    take_profit REAL,
+
+                    qty REAL NOT NULL,
+                    size_usd REAL NOT NULL,
+
+                    pnl_usd REAL,
+                    pnl_pct REAL,
+
+                    max_favorable_excursion REAL,
+                    max_adverse_excursion REAL,
+
+                    hold_hours REAL,
+                    exit_reason TEXT,
+
+                    order_id TEXT,
+                    signal_score REAL,
+
+                    created_at REAL DEFAULT (strftime('%s', 'now'))
+                )
+            ''')
+
+            # Create indexes
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_trades_timestamp ON trades(timestamp_open)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_trades_symbol ON trades(symbol)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_trades_engine ON trades(engine)')
+
+            conn.commit()
+            conn.close()
+
+            self.logger.info(f"[DB] Initialized SQLite database: {self.db_path}")
+        except Exception as e:
+            self.logger.error(f"[DB] Failed to initialize database: {e}")
+
+    def _save_trade(self, trade: Dict):
+        """Save a completed trade to the database"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+
+            cursor.execute('''
+                INSERT INTO trades (
+                    timestamp_open, timestamp_close, symbol, side, engine, regime, ddl_mode,
+                    entry_price, exit_price, stop_loss, take_profit,
+                    qty, size_usd, pnl_usd, pnl_pct,
+                    max_favorable_excursion, max_adverse_excursion,
+                    hold_hours, exit_reason, order_id, signal_score
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                trade.get('timestamp_open'),
+                trade.get('timestamp_close'),
+                trade.get('symbol'),
+                trade.get('side'),
+                trade.get('engine', 'unknown'),
+                trade.get('regime'),
+                trade.get('ddl_mode'),
+                trade.get('entry_price'),
+                trade.get('exit_price'),
+                trade.get('stop_loss'),
+                trade.get('take_profit'),
+                trade.get('qty'),
+                trade.get('size_usd'),
+                trade.get('pnl_usd'),
+                trade.get('pnl_pct'),
+                trade.get('max_favorable_excursion'),
+                trade.get('max_adverse_excursion'),
+                trade.get('hold_time_hours'),
+                trade.get('exit_reason'),
+                trade.get('order_id'),
+                trade.get('signal_score')
+            ))
+
+            conn.commit()
+            conn.close()
+
+            self.logger.debug(f"[DB] Saved trade: {trade.get('symbol')} PnL=${trade.get('pnl_usd', 0):.2f}")
+        except Exception as e:
+            self.logger.error(f"[DB] Failed to save trade: {e}")
 
     def update_equity(self, new_equity: float):
         """
@@ -137,8 +247,8 @@ class RiskEngine:
         old_equity = self.current_equity
         self.current_equity = new_equity
 
-        # First sync in LIVE mode: set session_start_equity
-        if self.session_start_equity is None and not self.config.sim_mode:
+        # First sync: set session_start_equity
+        if self.session_start_equity is None:
             self.session_start_equity = new_equity
             self.logger.info(f"💰 Session equity baseline set from MEXC: ${self.session_start_equity:.2f}")
 
@@ -175,8 +285,8 @@ class RiskEngine:
             return (self.config.pump_allocation_min, self.config.pump_allocation_max)
 
         try:
-            import os
             import csv
+            import os
 
             trade_log_path = 'logs/v4_trade_scores.csv'
 
@@ -317,7 +427,7 @@ class RiskEngine:
                     f"RSI: {rsi:.1f}\n"
                     f"30d Return: {return_30d:+.1f}%"
                 )
-                self.logger.info(f"[TELEGRAM] Sending regime change notification")
+                self.logger.info("[TELEGRAM] Sending regime change notification")
                 self.telegram.send(alert_msg)
                 self.current_regime = regime
             else:
@@ -390,6 +500,17 @@ class RiskEngine:
                 # Apply scaling
                 final_size = base_size * liquidity_factor
 
+                # === v4.2.2: REJECT if liquidity too low (instead of scaling to tiny size) ===
+                if liquidity_factor < self.config.min_liq_factor or final_size < self.config.min_adjusted_usd:
+                    self.logger.info(
+                        f"[LiquidityGuard] REJECT symbol={symbol} | "
+                        f"requested_size=${base_size:.2f} | adjusted_size=${final_size:.2f} | "
+                        f"spread={spread_pct:.2f}% | depth=${depth_usd:.0f} | "
+                        f"factor={liquidity_factor:.2f} | "
+                        f"reason={'factor<'+str(self.config.min_liq_factor) if liquidity_factor < self.config.min_liq_factor else 'size<$'+str(self.config.min_adjusted_usd)}"
+                    )
+                    return 0.0  # Signal to reject trade
+
                 # Only log if actually scaling down significantly
                 if liquidity_factor < 0.95:
                     self.logger.info(
@@ -428,9 +549,14 @@ class RiskEngine:
                 if not self.daily_loss_limit_hit:
                     try:
                         self.logger.info(f"[RISK] Daily loss limit HIT: {float(session_pnl_pct)*100:.2f}%")
-                    except:
+                    except Exception:
                         pass
                     self.daily_loss_limit_hit = True
+                # === v4.2.2: CORE rejection observability ===
+                self.logger.info(
+                    f"[CORE_REJECT] symbol={symbol} | reason=DAILY_LOSS_HARD | "
+                    f"session_pnl_pct={session_pnl_pct*100:.2f}% | limit=-2.0%"
+                )
                 return False, "Daily loss limit -2%"
 
         # Check anti-repeat cooldown (symbol+side specific)
@@ -443,8 +569,13 @@ class RiskEngine:
                     remaining_hours = (cooldown_end - now) / 3600
                     try:
                         self.logger.info(f"[RISK] Cooldown active for {symbol} {side}: {float(remaining_hours):.1f}h remaining")
-                    except:
+                    except Exception:
                         pass
+                    # === v4.2.2: CORE rejection observability ===
+                    self.logger.info(
+                        f"[CORE_REJECT] symbol={symbol} | reason=COOLDOWN | "
+                        f"side={side} | remaining_hours={remaining_hours:.1f}"
+                    )
                     return False, f"Cooldown {remaining_hours:.1f}h"
                 else:
                     # Cooldown expired, remove from tracker
@@ -456,7 +587,7 @@ class RiskEngine:
             if daily_loss_pct <= -self.config.max_daily_loss_pct:
                 # Send enhanced alert first time it's hit
                 if not self.daily_loss_alert_sent:
-                    self.logger.info(f"[TELEGRAM] Sending daily loss limit notification")
+                    self.logger.info("[TELEGRAM] Sending daily loss limit notification")
                     if self.alert_mgr:
                         self.alert_mgr.send_daily_loss_limit_hit(
                             loss_pct=daily_loss_pct * 100,
@@ -464,15 +595,19 @@ class RiskEngine:
                         )
                     else:
                         # Fallback to simple notification
-                        mode = "SIM" if self.config.sim_mode else "LIVE"
                         self.telegram.send(
                             f"⛔ DAILY LOSS LIMIT HIT\n"
-                            f"Mode: {mode}\n"
+                            f"Mode: LIVE\n"
                             f"Loss today: ${self.daily_pnl:.2f} ({daily_loss_pct*100:.2f}%)\n"
                             f"Limit: {self.config.max_daily_loss_pct*100:.1f}%\n"
                             f"No new trades will be opened until next daily reset."
                         )
                     self.daily_loss_alert_sent = True
+                # === v4.2.2: CORE rejection observability ===
+                self.logger.info(
+                    f"[CORE_REJECT] symbol={symbol} | reason=DAILY_LOSS_LIMIT | "
+                    f"daily_loss_pct={daily_loss_pct*100:.2f}% | max_loss_pct={self.config.max_daily_loss_pct*100:.2f}%"
+                )
                 return False, f"Daily loss limit hit ({daily_loss_pct*100:.2f}%)"
 
         # === UPGRADE E: Correlation-Aware Portfolio Heat ===
@@ -495,10 +630,21 @@ class RiskEngine:
                     f"bucket={bucket} already has {bucket_count} positions {bucket_symbols} | "
                     f"max={self.config.max_correlated_positions}"
                 )
+                # === v4.2.2: CORE rejection observability ===
+                self.logger.info(
+                    f"[CORE_REJECT] symbol={symbol} | reason=CORRELATION_LIMIT | "
+                    f"bucket={bucket} | bucket_count={bucket_count} | max={self.config.max_correlated_positions} | "
+                    f"bucket_symbols={bucket_symbols}"
+                )
                 return False, f"Bucket {bucket} limit reached ({bucket_count}/{self.config.max_correlated_positions})"
 
         # Check max concurrent positions
         if len(self.open_positions) >= self.config.max_concurrent_positions:
+            # === v4.2.2: CORE rejection observability ===
+            self.logger.info(
+                f"[CORE_REJECT] symbol={symbol} | reason=MAX_POSITIONS | "
+                f"current_positions={len(self.open_positions)} | max={self.config.max_concurrent_positions}"
+            )
             return False, f"Max concurrent positions reached ({len(self.open_positions)})"
 
         # Check pump-specific limits
@@ -506,6 +652,11 @@ class RiskEngine:
         if engine == 'pump':
             pump_count = sum(1 for p in self.open_positions if p.get('engine') == 'pump')
             if pump_count >= self.config.pump_max_concurrent:
+                # === v4.2.2: CORE rejection observability ===
+                self.logger.info(
+                    f"[CORE_REJECT] symbol={symbol} | reason=MAX_PUMP_POSITIONS | "
+                    f"pump_count={pump_count} | max={self.config.pump_max_concurrent}"
+                )
                 return False, f"Max pump positions reached ({pump_count})"
 
         # Check portfolio heat
@@ -513,7 +664,20 @@ class RiskEngine:
         engine_risk = self.get_risk_per_trade(engine)
 
         if (current_heat + engine_risk) > self.config.max_portfolio_heat:
-            return False, f"Portfolio heat limit ({current_heat*100:.3f}% + {engine_risk*100:.3f}% > {self.config.max_portfolio_heat*100:.2f}%)"
+            current_pct = current_heat * 100
+            engine_pct = engine_risk * 100
+            max_pct = self.config.max_portfolio_heat * 100
+            msg = (
+                f"Portfolio heat limit "
+                f"({current_pct:.3f}% + {engine_pct:.3f}% > {max_pct:.2f}%)"
+            )
+            # === v4.2.2: CORE rejection observability ===
+            self.logger.info(
+                f"[CORE_REJECT] symbol={symbol} | reason=PORTFOLIO_HEAT | "
+                f"current_heat={current_pct:.3f}% | engine_risk={engine_pct:.3f}% | "
+                f"total={current_pct+engine_pct:.3f}% | max={max_pct:.2f}%"
+            )
+            return False, msg
 
         return True, None
 
@@ -580,31 +744,19 @@ class RiskEngine:
                 self.cooldown_tracker[cooldown_key] = cooldown_end
                 try:
                     self.logger.info(f"[RISK] Cooldown activated for {symbol} {side}: 4h block after loss")
-                except:
+                except Exception:
                     pass
 
         # Hold time
         hold_time_sec = time.time() - position['timestamp_open']
         hold_time_hours = hold_time_sec / 3600
 
-        # Detailed SIM logging
-        if self.config.sim_mode:
-            self.logger.info(
-                f"🔴 [SIM-CLOSE] {position['symbol']} {position['side']} | "
-                f"exit={exit_price:.6f} | "
-                f"pnl_usd=${pnl_usd:.2f} | "
-                f"pnl_pct={pnl_pct:.2f}% | "
-                f"risk_usd=${initial_risk_usd:.2f} | "
-                f"R={r_multiple:.2f}R | "
-                f"hold={hold_time_hours:.1f}h | "
-                f"reason={reason}"
-            )
-        else:
-            self.logger.info(
-                f"🔴 Position closed | {position['symbol']} {position['side']} | "
-                f"PnL: ${pnl_usd:.2f} ({pnl_pct:.2f}%) | R: {r_multiple:.2f}R | "
-                f"Hold: {hold_time_hours:.1f}h | Reason: {reason}"
-            )
+        # Log position close
+        self.logger.info(
+            f"🔴 Position closed | {position['symbol']} {position['side']} | "
+            f"PnL: ${pnl_usd:.2f} ({pnl_pct:.2f}%) | R: {r_multiple:.2f}R | "
+            f"Hold: {hold_time_hours:.1f}h | Reason: {reason}"
+        )
 
         # Send enhanced Telegram notification for ALL trade closes
         try:
@@ -632,9 +784,8 @@ class RiskEngine:
                 self.logger.info(f"[TELEGRAM] Sent enhanced trade close notification for {position['symbol']}")
             else:
                 # Fallback to simple notification
-                mode = "SIM" if self.config.sim_mode else "LIVE"
                 telegram_msg = (
-                    f"🔴 [{mode}] TRADE CLOSED\n"
+                    f"🔴 [LIVE] TRADE CLOSED\n"
                     f"Symbol: {position['symbol']}\n"
                     f"Side: {position['side']}\n"
                     f"Engine: {position.get('engine', 'unknown')}\n"
@@ -664,6 +815,9 @@ class RiskEngine:
         }
         self.closed_trades_today.append(closed_trade)
 
+        # Save trade to database
+        self._save_trade(closed_trade)
+
         # Persist to /var/run/alpha-sniper/trades_today.json
         self._save_daily_trades()
 
@@ -683,7 +837,6 @@ class RiskEngine:
         """
         current_time = time.time()
         if current_time >= self.daily_reset_time:
-            mode = "SIM" if self.config.sim_mode else "LIVE"
             self.logger.info(f"🌅 Daily reset | PnL today: ${self.daily_pnl:.2f}")
 
             # Send enhanced daily summary if configured
@@ -719,7 +872,7 @@ class RiskEngine:
                         f"New entries are now allowed.\n"
                         f"Current equity: ${self.current_equity:.2f}"
                     )
-                    self.logger.info(f"[TELEGRAM] Sent daily reset notification")
+                    self.logger.info("[TELEGRAM] Sent daily reset notification")
                 except Exception as e:
                     self.logger.warning(f"[TELEGRAM] Failed to send daily reset notification: {e}")
 
@@ -754,7 +907,7 @@ class RiskEngine:
                         f"⚠️ Permission error writing positions file:\n{filepath}\n\n"
                         f"Bot continues but positions may not persist."
                     )
-                except:
+                except Exception:
                     pass
         except Exception as e:
             self.logger.warning(f"Failed to save positions to {filepath}: {e}")
@@ -775,7 +928,7 @@ class RiskEngine:
         if not self.open_positions and os.path.exists(filepath):
             try:
                 # Try to read file to check permissions
-                with open(filepath, 'r') as f:
+                with open(filepath, 'r'):
                     pass
             except PermissionError:
                 self.logger.error(f"❌ Permission error reading positions file at {filepath}")
@@ -787,7 +940,7 @@ class RiskEngine:
                             f"⚠️ Permission error reading positions file:\n{filepath}\n\n"
                             f"Bot will start without previous positions."
                         )
-                    except:
+                    except Exception:
                         pass
 
         if self.open_positions:
@@ -799,7 +952,6 @@ class RiskEngine:
         This file is used for daily reporting and gets cleared at UTC midnight.
         """
         import os
-        import json
 
         try:
             # Ensure directory exists

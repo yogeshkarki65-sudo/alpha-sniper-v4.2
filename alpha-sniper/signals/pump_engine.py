@@ -5,6 +5,7 @@ Pump Engine for Alpha Sniper V4.2
 - Strict filters, tight risk
 """
 from utils import helpers
+from types import SimpleNamespace
 
 
 class PumpEngine:
@@ -18,13 +19,41 @@ class PumpEngine:
     def __init__(self, config, logger):
         self.config = config
         self.logger = logger
+        self.settings = config  # Alias for compatibility
+
+        # Optional risk injection for diagnostic tools
+        if not hasattr(self, 'risk'):
+            self.risk = None
+
+        # Store fallback thresholds function as instance method if config doesn't have it
+        self._get_thresholds = None
+        if not hasattr(self.config, 'get_pump_thresholds'):
+            def _fallback_thresholds(regime: str):
+                # Use Settings; prefer early detector knobs if enabled, else legacy pump defaults
+                s = self.settings
+                return SimpleNamespace(
+                    min_score=getattr(s, 'MIN_SCORE', 28),
+                    min_rvol=getattr(s, 'EARLY_VOL_SPIKE_MIN', 2.0),
+                    min_24h_return=0.0,
+                    max_24h_return=1000.0,
+                    min_momentum=0.0,
+                    min_24h_quote_volume=getattr(s, 'MIN_24H_QUOTE_VOLUME', 47000.0),
+                    new_listing_min_rvol=getattr(s, 'EARLY_VOL_SPIKE_MIN', 2.0),
+                    new_listing_min_score=getattr(s, 'MIN_SCORE', 28),
+                    new_listing_min_momentum=0.0,
+                )
+            self._get_thresholds = _fallback_thresholds
 
         # Pump debug toggle - directly access config attribute
         self.debug_enabled = config.pump_debug_logging if hasattr(config, 'pump_debug_logging') else False
 
         # Log debug status on initialization
-        if self.debug_enabled:
+        if self.debug_enabled and self.logger:
             self.logger.info("[PUMP_DEBUG] Debug logging ENABLED for pump engine")
+
+    def set_risk(self, risk):
+        """Allow external risk engine injection for diagnostics."""
+        self.risk = risk
 
     def generate_signals(self, market_data: dict, regime: str, open_positions=None) -> list:
         """
@@ -32,11 +61,20 @@ class PumpEngine:
         """
         signals = []
 
-        if not self.config.pump_engine_enabled:
+        # Check if engine is disabled via config flag
+        if hasattr(self.config, 'pump_engine_enabled') and not self.config.pump_engine_enabled:
             return signals
 
-        # Get regime-specific thresholds
-        thresholds = self.config.get_pump_thresholds(regime)
+        # Get regime-specific thresholds (use fallback if config doesn't have method)
+        if hasattr(self.config, 'get_pump_thresholds'):
+            thresholds = self.config.get_pump_thresholds(regime)
+        elif self._get_thresholds is not None:
+            thresholds = self._get_thresholds(regime)
+        else:
+            # No thresholds available - return empty signals
+            if self.logger:
+                self.logger.warning("No threshold source available - pump engine disabled")
+            return signals
 
         # Log active thresholds for this regime
         if self.debug_enabled:
@@ -82,11 +120,148 @@ class PumpEngine:
             }
             debug_rejections = []
 
+        # Early pump detection settings (5-minute momentum)
+        early_enabled = getattr(self.config, 'EARLY_ENABLE', True)
+        early_ret_5m_min = getattr(self.config, 'EARLY_RET_5M_MIN', 0.03)
+        early_vol_spike_min = getattr(self.config, 'EARLY_VOL_SPIKE_MIN', 3.0)
+        early_accel_required = getattr(self.config, 'EARLY_ACCEL_REQUIRED', True)
+        early_require_score = getattr(self.config, 'EARLY_REQUIRE_SCORE', False)
+        early_require_bull = getattr(self.config, 'EARLY_REQUIRE_BULL', False)
+        quick_exit_enabled = getattr(self.config, 'QUICK_EXIT_ENABLE', True)
+        quick_tp_pct = getattr(self.config, 'QUICK_TP_PCT', 0.02)
+        quick_sl_pct = getattr(self.config, 'QUICK_SL_PCT', 0.01)
+        quick_max_hold_min = getattr(self.config, 'QUICK_MAX_HOLD_MIN', 5)
+
         for symbol in valid_symbols:
             try:
+                md = market_data.get(symbol)
+                if not md:
+                    continue
+
+                # Try early pump detection first (5-minute momentum)
+                took_early = False
+                if early_enabled:
+                    df = md.get('df')
+                    if df is not None and len(df) >= 25:
+                        # Get close and volume columns (handle case variations)
+                        close_col = 'close' if 'close' in df.columns else ('c' if 'c' in df.columns else None)
+                        vol_col = 'volume' if 'volume' in df.columns else ('v' if 'v' in df.columns else None)
+
+                        if close_col and vol_col:
+                            close = df[close_col]
+                            vol = df[vol_col]
+
+                            # Calculate 5-minute return (last 6 candles on 1m chart)
+                            c_now = float(close.iloc[-1])
+                            c_5m_ago = float(close.iloc[-6]) if len(close) >= 6 else float(close.iloc[0])
+                            ret_5m = (c_now / c_5m_ago) - 1.0 if c_5m_ago > 0 else 0.0
+
+                            # Calculate volume spike (last candle vs 20-candle avg)
+                            v_last = float(vol.iloc[-1])
+                            v_avg20 = float(vol.iloc[-20:].mean()) if len(vol) >= 20 else float(vol.mean())
+                            vol_spike = (v_last / v_avg20) if v_avg20 > 0 else 0.0
+
+                            # Check acceleration (last close > previous close)
+                            accelerating = float(close.iloc[-1]) > float(close.iloc[-2]) if len(close) >= 2 else False
+
+                            # Wick filter: Check if 5m move is abnormally large (likely a spike/wick)
+                            wick_filter_enabled = getattr(self.config, 'WICK_FILTER_ENABLE', True)
+                            wick_filter_atr_mult = getattr(self.config, 'WICK_FILTER_ATR_MULT', 2.0)
+                            is_wick = False
+
+                            if wick_filter_enabled and len(df) >= 14:
+                                # Calculate ATR (14-period)
+                                high_col = 'high' if 'high' in df.columns else ('h' if 'h' in df.columns else None)
+                                low_col = 'low' if 'low' in df.columns else ('l' if 'l' in df.columns else None)
+
+                                if high_col and low_col:
+                                    high = df[high_col]
+                                    low = df[low_col]
+
+                                    # True Range = max(high - low, abs(high - prev_close), abs(low - prev_close))
+                                    tr = []
+                                    for i in range(1, len(df)):
+                                        h = float(high.iloc[i])
+                                        l = float(low.iloc[i])
+                                        pc = float(close.iloc[i-1])
+                                        tr.append(max(h - l, abs(h - pc), abs(l - pc)))
+
+                                    # ATR = average of last 14 TR values
+                                    if len(tr) >= 14:
+                                        atr = sum(tr[-14:]) / 14.0
+
+                                        # Calculate 5m price move in absolute terms
+                                        move_5m = abs(c_now - c_5m_ago)
+
+                                        # Reject if move exceeds ATR * multiplier (likely a wick)
+                                        if move_5m > atr * wick_filter_atr_mult:
+                                            is_wick = True
+
+                            # Check if qualifies
+                            qualifies = (
+                                ret_5m >= early_ret_5m_min
+                                and vol_spike >= early_vol_spike_min
+                                and (accelerating or not early_accel_required)
+                                and not is_wick
+                            )
+
+                            if qualifies:
+                                # Additional checks
+                                if early_require_bull and regime != 'BULL':
+                                    qualifies = False
+
+                                if early_require_score:
+                                    indicators = md.get('indicators', {})
+                                    score = indicators.get('score', 0)
+                                    if score < thresholds.min_score:
+                                        qualifies = False
+
+                                if qualifies:
+                                    # Create early pump signal
+                                    entry = c_now
+                                    if quick_exit_enabled:
+                                        sl = entry * (1.0 - quick_sl_pct)
+                                        tp2r = entry + 2.0 * (entry - sl)
+                                        tp4r = entry + 4.0 * (entry - sl)
+                                        max_hold_h = quick_max_hold_min / 60.0
+                                    else:
+                                        sl = entry * 0.98
+                                        tp2r = entry * 1.04
+                                        tp4r = entry * 1.08
+                                        max_hold_h = 4.0 / 60.0
+
+                                    indicators = md.get('indicators', {})
+                                    score = indicators.get('score', 0)
+
+                                    signals.append({
+                                        'symbol': symbol,
+                                        'side': 'long',
+                                        'engine': 'pump_early',
+                                        'entry_price': entry,
+                                        'stop_loss': sl,
+                                        'tp_2r': tp2r,
+                                        'tp_4r': tp4r,
+                                        'score': max(score, 0.0),
+                                        'regime': regime,
+                                        'max_hold_hours': max_hold_h,
+                                    })
+                                    took_early = True
+
+                                    if self.debug_enabled:
+                                        self.logger.info(
+                                            f"[PUMP_DEBUG] EARLY signal: {symbol} | "
+                                            f"ret_5m={ret_5m*100:.2f}% | vol_spike={vol_spike:.2f}x | "
+                                            f"accel={accelerating}"
+                                        )
+
+                # Skip legacy pump check if we took early signal
+                if took_early:
+                    continue
+
+                # Fall back to legacy pump logic
                 result = self._evaluate_symbol(
                     symbol,
-                    market_data.get(symbol),
+                    md,
                     regime,
                     open_positions,
                     thresholds=thresholds,
@@ -197,6 +372,27 @@ class PumpEngine:
             return_24h = ((df_1h['close'].iloc[-1] / df_1h['close'].iloc[-25]) - 1) * 100
         else:
             return_24h = 0
+
+        # === v4.2.2: FRESH IMPULSE detection (volume spike in recent candle) ===
+        fresh_impulse = False
+        if len(df_15m) >= 2:
+            try:
+                last_15m_volume = df_15m['volume'].iloc[-1]
+                prev_15m_volume = df_15m['volume'].iloc[-2]
+                volume_spike_ratio = last_15m_volume / prev_15m_volume if prev_15m_volume > 0 else 0
+
+                if volume_spike_ratio >= self.config.pump_spike_mult:
+                    fresh_impulse = True
+
+                # SIDEWAYS regime protection: reject if already extended
+                if regime == "SIDEWAYS" and return_24h > self.config.pump_max_24h_extended:
+                    if debug_rejections is not None:
+                        debug_rejections.append(
+                            f"{symbol}: ALREADY_EXTENDED (ret_24h={return_24h:.1f}% > max={self.config.pump_max_24h_extended}%)"
+                        )
+                    return None
+            except Exception as e:
+                self.logger.debug(f"[PUMP] Fresh impulse check error for {symbol}: {e}")
 
         # Check if this is a new listing (bypass stricter filters if enabled)
         is_new_listing = False

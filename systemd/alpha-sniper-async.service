@@ -1,0 +1,42 @@
+[Unit]
+Description=Alpha Sniper V4.2 Async Trading Bot
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+
+# Working directory
+WorkingDirectory=/opt/alpha-sniper
+
+# Environment file (async config)
+EnvironmentFile=-/opt/alpha-sniper/alpha-sniper/.env.async
+
+# Pre-start checks (directories should be created manually with correct permissions)
+# Run these commands once before starting:
+#   sudo mkdir -p /var/lib/alpha-sniper-async /opt/alpha-sniper/logs-async
+#   sudo chown -R ubuntu:ubuntu /var/lib/alpha-sniper-async /opt/alpha-sniper/logs-async
+ExecStartPre=/bin/bash -c 'test -d /var/lib/alpha-sniper-async || (echo "ERROR: /var/lib/alpha-sniper-async does not exist. Create it first." && exit 1)'
+ExecStartPre=/bin/bash -c 'test -d /opt/alpha-sniper/logs-async || (echo "ERROR: /opt/alpha-sniper/logs-async does not exist. Create it first." && exit 1)'
+
+# Start command - async bot
+ExecStart=/opt/alpha-sniper/venv/bin/python /opt/alpha-sniper/app_async.py
+
+# Restart policy
+Restart=on-failure
+RestartSec=10s
+StartLimitBurst=5
+StartLimitIntervalSec=300
+
+# Resource limits
+LimitNOFILE=65536
+MemoryMax=2G
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=alpha-sniper-async
+
+[Install]
+WantedBy=multi-user.target
