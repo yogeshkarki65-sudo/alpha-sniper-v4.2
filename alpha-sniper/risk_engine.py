@@ -362,8 +362,12 @@ class RiskEngine:
 
     def update_regime(self):
         """
-        Update market regime based on BTC/USDT daily data
-        Regimes: BULL, SIDEWAYS, MILD_BEAR, DEEP_BEAR
+        Determine and update the engine's market regime using BTC/USDT daily price data.
+        
+        Sets self.current_regime to one of "BULL", "SIDEWAYS", "MILD_BEAR", or "DEEP_BEAR" based on the 200-period EMA, 14-period RSI, and the 30-day price return. The method only recalculates when the last update is older than self.regime_update_interval; when the regime changes it sends a Telegram notification and updates self.last_regime_update. If there is insufficient market data or an error occurs, the regime is set to and returned as "SIDEWAYS".
+        
+        Returns:
+            current_regime (str): The updated regime value.
         """
         current_time = time.time()
 
@@ -412,7 +416,12 @@ class RiskEngine:
             elif abs(return_30d) <= 10 or (45 <= rsi <= 55):
                 regime = "SIDEWAYS"
             else:
-                # Default to SIDEWAYS for edge cases
+                # Default to SIDEWAYS for edge cases (log for analysis)
+                self.logger.debug(
+                    f"Regime detection fallback to SIDEWAYS: "
+                    f"price={current_price:.2f}, ema200={ema200:.2f}, "
+                    f"return_30d={return_30d:.1f}%, rsi={rsi:.1f}"
+                )
                 regime = "SIDEWAYS"
 
             # Check if regime changed

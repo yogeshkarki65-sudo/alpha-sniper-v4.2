@@ -306,10 +306,24 @@ class PumpEngine:
         debug_rejections=None,
     ):
         """
-        Evaluate a single symbol for pump entry using regime-aware thresholds
-
+        Evaluate whether a single symbol meets pump entry criteria for the given regime and, if so, construct a pump signal dictionary.
+        
+        Performs data validation and regime-aware gating (volume, spread, RVOL, 1h momentum, 24h return), supports aggressive-mode and new-listing overrides, computes stop loss and target prices, and determines maximum hold time. If the symbol fails any eligibility checks, returns None.
+        
+        Parameters:
+            symbol (str): Ticker symbol to evaluate.
+            data (dict): Market payload expected to contain 'ticker' (with 'quoteVolume'), 'df_15m' (DataFrame), 'df_1h' (DataFrame), and optionally 'spread_pct'.
+            regime (str): Active regime name used to select thresholds and behavior.
+            open_positions: Current open positions context (may influence decision logic; pass-through).
+            thresholds: Regime-specific thresholds object with fields used for gating and scoring.
+            debug_counts (dict, optional): Mutable counters updated for debugging phases (e.g., "after_data", "after_volume", "after_spread", "after_score", "after_core").
+            debug_rejections (list, optional): If provided, rejection reasons are appended to this list for sampling/logging.
+        
         Returns:
-            signal dict or None
+            dict or None: A signal dictionary on success containing keys
+                'symbol', 'side', 'engine', 'score', 'entry_price', 'stop_loss', 'tp_2r', 'tp_4r',
+                'rvol', 'momentum_1h', 'return_24h', 'volume_24h', 'max_hold_hours', and 'regime';
+            returns None if the symbol does not meet pump entry criteria.
         """
         # Get data
         ticker = data.get('ticker') if data else None
@@ -402,8 +416,32 @@ class PumpEngine:
             if rvol >= 5.0:
                 is_new_listing = True
 
-        # Apply regime-aware thresholds (simple, no complex mode logic)
-        if is_new_listing:
+        # Apply thresholds: aggressive mode overrides regime thresholds if enabled
+        if self.config.pump_aggressive_mode:
+            # Use aggressive mode thresholds (override regime-based)
+            rvol_check = rvol >= self.config.pump_aggressive_min_rvol
+            momentum_check = momentum_1h >= self.config.pump_aggressive_min_momentum
+            volume_check = volume_24h >= self.config.pump_aggressive_min_24h_quote_volume
+            return_check = self.config.pump_aggressive_min_24h_return <= return_24h <= self.config.pump_aggressive_max_24h_return
+
+            # Additional aggressive filters (if configured)
+            if self.config.pump_aggressive_price_above_ema1m and len(df_15m) >= 15:
+                ema_1m = df_15m['close'].ewm(span=60, adjust=False).mean().iloc[-1]
+                if current_price < ema_1m:
+                    if debug_rejections is not None:
+                        debug_rejections.append(
+                            f"{symbol}: AGGRESSIVE_PRICE_BELOW_EMA1M (price={current_price:.6f} < ema1m={ema_1m:.6f})"
+                        )
+                    return None
+
+            # Volume check for aggressive mode
+            if not volume_check:
+                if debug_rejections is not None:
+                    debug_rejections.append(
+                        f"{symbol}: AGGRESSIVE_VOLUME_LOW (24h=${volume_24h:,.0f} < min=${self.config.pump_aggressive_min_24h_quote_volume:,.0f})"
+                    )
+                return None
+        elif is_new_listing:
             # Use relaxed new listing thresholds
             rvol_check = rvol >= thresholds.new_listing_min_rvol
             momentum_check = momentum_1h >= thresholds.new_listing_min_momentum

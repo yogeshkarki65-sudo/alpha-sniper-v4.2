@@ -896,13 +896,9 @@ class AlphaSniperBot:
 
     async def scan_loop(self):
         """
-        SCAN LOOP (slow, CPU-heavy)
-        - Runs every SCAN_INTERVAL_SECONDS (e.g. 300s)
-        - Updates regime
-        - Scans universe for signals
-        - Opens new positions
-        - Runs DFE daily at 00:05 UTC
-        - Supports FAST_MODE with auto-disable
+        Manage the periodic full scanning cycle that updates regime, scans for signals, and opens new positions.
+        
+        Runs the main trading cycle at the configured scan interval (fast or normal), updates self.last_scan_time for drift detection, executes scheduled Dynamic Filter Engine (DFE) work daily at 00:05 UTC when enabled, and automatically disables fast mode after the configured maximum runtime (sending a Telegram notification when that occurs). Scheduled tasks are processed each loop iteration and the method applies a backoff on uncaught errors to avoid rapid repeated failures.
         """
         self.logger.info("🔄 SCAN LOOP started")
 
@@ -912,7 +908,7 @@ class AlphaSniperBot:
 
         # Run first cycle immediately
         self.trading_cycle()
-        self.last_scan_time = time.time()  # Track scan time
+        self.last_scan_time = time.time()  # Track scan time for both elapsed calc and drift detection
 
         # Setup DFE scheduling if enabled
         if self.config.dfe_enabled:
@@ -921,12 +917,10 @@ class AlphaSniperBot:
         else:
             self.logger.info("🔧 DFE disabled - filters will not auto-adjust")
 
-        last_scan_time = time.time()
-
         while self.running:
             try:
                 current_time = time.time()
-                elapsed = current_time - last_scan_time
+                elapsed = current_time - self.last_scan_time
 
                 # Check if FAST_MODE should be auto-disabled
                 if self.config.fast_mode_enabled and self.fast_mode_start_time:
@@ -960,8 +954,7 @@ class AlphaSniperBot:
                 # Check if it's time to run next scan
                 if elapsed >= scan_interval:
                     self.trading_cycle()
-                    last_scan_time = current_time
-                    self.last_scan_time = current_time  # Track for drift detection
+                    self.last_scan_time = current_time  # Track for drift detection and next elapsed calc
                     self.drift_alert_sent = False  # Reset drift alert when scan completes
 
                 # Check scheduled tasks (DFE)
@@ -973,15 +966,13 @@ class AlphaSniperBot:
             except Exception as e:
                 self.logger.error(f"Error in scan_loop: {e}")
                 self.logger.exception(e)
-                await asyncio.sleep(5)  # Back off on error
+                await asyncio.sleep(30)  # Back off on error (30s to prevent rapid error logging)
 
     async def position_loop(self):
         """
-        POSITION LOOP (fast, lightweight)
-        - Runs every POSITION_CHECK_INTERVAL_SECONDS (e.g. 15s)
-        - Checks SL/TP for open positions only
-        - Does NOT scan universe or generate signals
-        - Does NOT update regime or filters
+        Continuously performs lightweight position maintenance tasks at the configured interval.
+        
+        Performs stop-loss / take-profit checks for open positions, processes pending Entry-DETE signals when enabled, updates pump-based trailing stops, and persists positions when any are open. On startup the loop waits position_check_interval_seconds to avoid conflicting with the initial scan; it then repeats these checks while the bot is running and backs off briefly on unexpected errors.
         """
         self.logger.info("⚡ POSITION LOOP (Fast Stop Manager) started")
 
